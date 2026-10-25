@@ -1,0 +1,59 @@
+name: Server CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Pytest & smoke
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest httpx
+
+      - name: Run unit tests
+        env:
+          STLAND_DATA_DIR: ./data
+          STLAND_SIGNATURE_REQUIRED: 'false'
+        run: pytest -q
+
+      - name: Boot smoke test
+        env:
+          STLAND_DATA_DIR: ./data
+          STLAND_TICK_SECONDS: '0.5'
+          STLAND_SIGNATURE_REQUIRED: 'false'
+        run: |
+          uvicorn app.main:app --port 8999 &
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8999/api/health > /tmp/health.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/health.json
+          python - <<'PY'
+          import json, urllib.request
+          h = json.load(open('/tmp/health.json'))
+          assert h['status'] == 'ok', h
+          assert h['engine']['listed'] == 28, h
+          req = urllib.request.Request(
+              'http://127.0.0.1:8999/api/auth/login',
+              data=json.dumps({'username': 'retail01', 'password': 'Stland@2026'}).encode(),
+              headers={'Content-Type': 'application/json'},
+          )
+          body = json.load(urllib.request.urlopen(req))
+          assert 'access_token' in body or 'token' in body, body
+          print('登录与健康检查通过')
+          PY
