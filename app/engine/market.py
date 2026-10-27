@@ -191,6 +191,16 @@ class MarketEngine:
                 day_volume_base=max(1000.0, float_shares * 0.0006),
             )
 
+    def unregister(self, code: str) -> bool:
+        """下线一支标的：从内存引擎摘除，之后的行情/撮合都不再包含它。
+
+        运营在后台删除标的时调用。不删库内记录的就绪状态，只摘内存状态，
+        这样重启后若库里仍有该行，register_engine 会重新注册；
+        若库里也已删除，则彻底不再出现。
+        """
+        with self._lock:
+            return self._states.pop(code, None) is not None
+
     def registered(self) -> bool:
         return bool(self._states)
 

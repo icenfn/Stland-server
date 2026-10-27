@@ -17,27 +17,35 @@ from .services.trading import settle_all
 
 
 def ensure_stocks(session: Session) -> int:
-    """注册 28 支内置标的并写入元数据（幂等）。"""
+    """把 28 支内置标的作为「默认标的」注入数据库（幂等，且绝不覆盖已有记录）。
+
+    为什么改成这样
+    --------------
+    旧实现每次启动都会把 init_price / 涨跌停 / vol / beta 等参数按种子文件重写一遍。
+    后果是：运营在服务端后台改过的参数，重启一次就被打回原形，
+    客户端看到的永远只有「写死的 28 支」，等于标的被硬编码锁死。
+
+    现在的语义是「默认值」而不是「真值」：
+      · 库里没有该代码 → 按种子插入（首次部署即得到 28 支可直接交易的标的）；
+      · 库里已有该代码 → 原样保留，运营改过的名字、价格、参数、上下架状态都不会被动；
+      · 运营删除过的代码 → 记在 SystemEvent 里，不自动复活。
+    """
     existing = {s.code for s in session.exec(select(Stock)).all()}
+
+    # 已经被运营删除的标的不要偷偷加回来
+    removed_codes: set[str] = set()
+    try:
+        for ev in session.exec(select(SystemEvent).where(SystemEvent.kind == "stock_removed")).all():
+            if ev.message:
+                removed_codes.add(ev.message.strip().split(" ")[0])
+    except Exception:
+        removed_codes = set()
+
     added = 0
     for seed in SEED_STOCKS:
-        pct = LIMIT_BY_BOARD.get(seed.board, 0.10)
-        limit_up = round(seed.init_price * (1 + pct), 2)
-        limit_down = round(seed.init_price * (1 - pct), 2)
-        if seed.code in existing:
-            # 同步涨跌停/参数，保证重启后行情引擎与库内一致
-            row = session.get(Stock, seed.code)
-            if row:
-                row.init_price = seed.init_price
-                row.limit_up = limit_up
-                row.limit_down = limit_down
-                row.vol = seed.vol
-                row.beta = seed.beta
-                row.drift = seed.drift
-                row.liquidity = seed.liquidity
-                row.float_shares = seed.float_shares
-                session.add(row)
+        if seed.code in existing or seed.code in removed_codes:
             continue
+        pct = LIMIT_BY_BOARD.get(seed.board, 0.10)
         session.add(
             Stock(
                 code=seed.code,
@@ -48,8 +56,8 @@ def ensure_stocks(session: Session) -> int:
                 theme=seed.theme,
                 prev_close=seed.init_price,
                 init_price=seed.init_price,
-                limit_up=limit_up,
-                limit_down=limit_down,
+                limit_up=round(seed.init_price * (1 + pct), 2),
+                limit_down=round(seed.init_price * (1 - pct), 2),
                 tick_size=0.01,
                 lot_size=100,
                 total_shares=seed.float_shares * 1.55,
@@ -90,13 +98,13 @@ def ensure_users(session: Session) -> int:
 
 
 def ensure_history(session: Session) -> int:
-    """为没有日线的标的回填历史 K 线（确定性随机数，可复现）。"""
+    """为「库内所有缺少日线」的标的回填历史 K 线（含运营后来新增的标的）。"""
     have = {row.code for row in session.exec(select(DailyBar)).all()}
     added = 0
-    for seed in SEED_STOCKS:
-        if seed.code in have:
+    for stock in session.exec(select(Stock)).all():
+        if stock.code in have:
             continue
-        bars = market_engine.backfill_daily(seed.code, settings.history_days)
+        bars = market_engine.backfill_daily(stock.code, settings.history_days)
         for b in bars:
             session.add(DailyBar(**b))
         added += len(bars)

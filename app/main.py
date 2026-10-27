@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from .bootstrap import bootstrap, start_engine, stop_engine
 from .config import settings
 from .engine.session import current_session
-from .routers import account, admin, auth, market, trade
+from .routers import account, admin, auth, market, stream, trade
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,6 +92,7 @@ app.include_router(market.router)
 app.include_router(trade.router)
 app.include_router(account.router)
 app.include_router(admin.router)
+app.include_router(stream.router)
 
 
 @app.get("/", tags=["meta"])

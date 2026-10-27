@@ -309,3 +309,162 @@ def leaderboard(session: Session = Depends(get_session), _: User = Depends(admin
     ]
     items.sort(key=lambda x: x["total_asset"], reverse=True)
     return {"items": items}
+
+class StockIn(BaseModel):
+    """新增 / 修改标的的入参。仅覆盖运营真正会调的字段。"""
+
+    code: str = Field(max_length=12, description="6 位 A 股代码")
+    name: str = Field(max_length=24)
+    board: str = Field(default="主板", max_length=12)
+    industry: str = Field(default="", max_length=24)
+    hotword: str = Field(default="", max_length=40)
+    theme: str = Field(default="", max_length=80)
+    init_price: float = Field(default=10.0, gt=0)
+    vol: float = Field(default=0.35, gt=0, le=3.0)
+    beta: float = Field(default=1.0, gt=0, le=5.0)
+    drift: float = Field(default=0.0, ge=-0.5, le=0.5)
+    liquidity: float = Field(default=1.0, gt=0, le=10.0)
+    float_shares: float = Field(default=5e8, gt=0)
+
+
+LIMIT_BY_BOARD = {"主板": 0.10, "创业板": 0.20, "科创板": 0.20, "北交所": 0.30}
+
+
+def _apply(stock: Stock, payload: StockIn) -> Stock:
+    """把入参写进 Stock 行，并同步涨跌停与价格格子。"""
+    pct = LIMIT_BY_BOARD.get(payload.board, 0.10)
+    stock.name = payload.name
+    stock.board = payload.board
+    stock.industry = payload.industry
+    stock.hotword = payload.hotword
+    stock.theme = payload.theme
+    stock.init_price = payload.init_price
+    stock.prev_close = payload.init_price
+    stock.limit_up = round(payload.init_price * (1 + pct), 2)
+    stock.limit_down = round(payload.init_price * (1 - pct), 2)
+    stock.vol = payload.vol
+    stock.beta = payload.beta
+    stock.drift = payload.drift
+    stock.liquidity = payload.liquidity
+    stock.float_shares = payload.float_shares
+    stock.total_shares = payload.float_shares * 1.55
+    return stock
+
+
+def _register(stock: Stock) -> None:
+    """把库内标的同步进内存行情引擎（新增与修改都要走一遍）。"""
+    pct = LIMIT_BY_BOARD.get(stock.board, 0.10)
+    market_engine.register(
+        code=stock.code,
+        name=stock.name,
+        init_price=stock.prev_close or stock.init_price,
+        tick_size=stock.tick_size,
+        limit_up_pct=pct,
+        beta=stock.beta,
+        drift=stock.drift,
+        vol=stock.vol,
+        liquidity=stock.liquidity,
+        float_shares=stock.float_shares,
+    )
+
+
+@router.post("/stocks", dependencies=[Depends(signed_request)])
+def create_stock(
+    payload: StockIn,
+    request: Request,
+    session: Session = Depends(get_session),
+    admin: User = Depends(admin_user),
+) -> dict:
+    """新增标的：写库 + 注册到行情引擎，立即可以交易。
+
+    内置的 28 支只是「默认标的」，运营可以随时增删改，不再被硬编码锁死。
+    """
+    if session.get(Stock, payload.code) is not None:
+        raise HTTPException(400, detail={"code": "DUP_CODE", "message": f"标的 {payload.code} 已存在"})
+    stock = _apply(Stock(code=payload.code, tick_size=0.01, lot_size=100), payload)
+    session.add(stock)
+    session.add(
+        AuditLog(
+            user_id=admin.id,
+            username=admin.username,
+            action="stock_create",
+            detail=f"{payload.code} {payload.name}",
+            ip=request.client.host if request.client else "",
+        )
+    )
+    session.commit()
+    _register(stock)
+    return {"ok": True, "code": stock.code}
+
+
+@router.put("/stocks/{code}", dependencies=[Depends(signed_request)])
+def update_stock(
+    code: str,
+    payload: StockIn,
+    request: Request,
+    session: Session = Depends(get_session),
+    admin: User = Depends(admin_user),
+) -> dict:
+    """修改标的参数（改名、换板块、调波动率等），改完立即在引擎生效。"""
+    stock = session.get(Stock, code)
+    if stock is None:
+        raise HTTPException(404, detail={"code": "STOCK_NOT_FOUND", "message": "标的不存在"})
+    if payload.code != code:
+        raise HTTPException(400, detail={"code": "CODE_IMMUTABLE", "message": "代码不可修改，如需换码请删除后新增"})
+    _apply(stock, payload)
+    session.add(stock)
+    session.add(
+        AuditLog(
+            user_id=admin.id,
+            username=admin.username,
+            action="stock_update",
+            detail=f"{code} {payload.name}",
+            ip=request.client.host if request.client else "",
+        )
+    )
+    session.commit()
+    # 引擎里已存在该代码时 register 会覆盖其状态，等价于「热更新参数」
+    _register(stock)
+    return {"ok": True, "code": code}
+
+
+@router.delete("/stocks/{code}", dependencies=[Depends(signed_request)])
+def delete_stock(
+    code: str,
+    request: Request,
+    session: Session = Depends(get_session),
+    admin: User = Depends(admin_user),
+) -> dict:
+    """下线标的：删库内记录 + 从行情引擎摘除。
+
+    记一条 SystemEvent 表示「运营主动删除」，bootstrap 看到它就不会在
+    下次启动时把这条种子数据又加回来。
+    """
+    stock = session.get(Stock, code)
+    if stock is None:
+        raise HTTPException(404, detail={"code": "STOCK_NOT_FOUND", "message": "标的不存在"})
+    held = session.exec(select(Position).where(Position.code == code, Position.quantity > 0)).all()
+    if held:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "STOCK_HELD",
+                "message": f"仍有 {len(held)} 个账户持有该标的，请先处理持仓后再下线",
+            },
+        )
+    session.delete(stock)
+    session.add(
+        SystemEvent(kind="stock_removed", message=f"{code} 已由 {admin.username} 下线")
+    )
+    session.add(
+        AuditLog(
+            user_id=admin.id,
+            username=admin.username,
+            action="stock_delete",
+            detail=f"{code} {stock.name}",
+            ip=request.client.host if request.client else "",
+        )
+    )
+    session.commit()
+    market_engine.unregister(code)
+    return {"ok": True}
