@@ -6,7 +6,7 @@
 自包含特性：
 * 无外部行情数据源：全部行情由内置模拟引擎生成（GBM + OU 市场因子 + GARCH 波动率聚集 + 跳跃）；
 * 无外部 API：账户、撮合、结算、风控、审计全在 SQLite 内完成；
-* 首次启动自动建表、写入 28 支内置标的、5 个演示账户、29 天历史日线。
+* 启动只建表并注册引擎，不写入任何业务数据；标的/账户/日线在后台面板显式初始化（/admin）。
 """
 from __future__ import annotations
 
@@ -14,9 +14,12 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from .bootstrap import bootstrap, start_engine, stop_engine
 from .config import settings
@@ -87,6 +90,11 @@ async def unhandled(request: Request, exc: Exception):  # pragma: no cover
     )
 
 
+# 运营后台面板（单页应用，纯静态，调用 /api/admin/*）
+_STATIC_ADMIN = Path(__file__).resolve().parent / "static" / "admin"
+if _STATIC_ADMIN.is_dir():
+    app.mount("/admin", StaticFiles(directory=str(_STATIC_ADMIN), html=True), name="admin")
+
 app.include_router(auth.router)
 app.include_router(market.router)
 app.include_router(trade.router)
@@ -111,6 +119,7 @@ def root() -> dict:
             "/api/account/summary",
             "/api/admin/dashboard",
         ],
+        "admin_panel": "/admin/",
     }
 
 

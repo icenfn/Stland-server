@@ -1,6 +1,7 @@
 """账户路由：资产总览、持仓、资金流水、业绩曲线、风控设置。"""
 from __future__ import annotations
 
+import json
 import math
 import time
 
@@ -10,7 +11,7 @@ from sqlmodel import Session, select
 
 from ..db import get_session
 from ..engine.market import market_engine
-from ..models import CashFlow, Position, Stock, Trade, User
+from ..models import CashFlow, Position, RiskAssessment, Stock, Trade, User
 from ..services.deps import current_user, signed_request
 from ..services.trading import settle_positions
 
@@ -174,7 +175,50 @@ def performance(session: Session = Depends(get_session), user: User = Depends(cu
 
 
 class RiskIn(BaseModel):
-    risk_level: int = Field(ge=1, le=3)
+    """风险测评提交：客户端传原始答案与问卷版本，服务端自己算分并落档。
+
+    为什么不让客户端直接传 level
+    --------------------------
+    客户端传 level 等于「让被评人自己宣布结论」，既无法复核也无法审计。
+    改为传 answers + version，服务端用同一份评分口径复算：
+      · 分数、等级由服务端产生，客户端只负责呈现；
+      · 每次提交写一条 RiskAssessment，历史留痕；
+      · User.risk_level 冗余保存最新等级，供资产页与后台快速查询。
+    """
+
+    version: int = Field(default=1, ge=1, le=99)
+    answers: list[int] = Field(default_factory=list, max_length=32)
+    score: int | None = Field(default=None, ge=0, le=100)
+
+
+# 评分口径（与客户端问卷一一对应）：每题选项分值与各档阈值
+RISK_OPTION_SCORES: tuple[tuple[int, ...], ...] = (
+    (0, 1, 2, 4),
+    (0, 1, 2, 4),
+    (0, 1, 2, 4),
+    (0, 1, 2, 4),
+    (0, 1, 2, 4),
+)
+
+
+def score_to_level(total: int) -> int:
+    if total <= 7:
+        return 1
+    if total <= 13:
+        return 2
+    return 3
+
+
+def compute_risk(answers: list[int]) -> tuple[int, int]:
+    """按题目下标与选项下标复算总分与等级（越界选项按 0 分处理，不报错）。"""
+    total = 0
+    for qi, oi in enumerate(answers):
+        if qi >= len(RISK_OPTION_SCORES):
+            break
+        row = RISK_OPTION_SCORES[qi]
+        if 0 <= oi < len(row):
+            total += row[oi]
+    return total, score_to_level(total)
 
 
 @router.post("/risk", dependencies=[Depends(signed_request)])
@@ -183,36 +227,57 @@ def set_risk(
     session: Session = Depends(get_session),
     user: User = Depends(current_user),
 ) -> dict:
-    user.risk_level = payload.risk_level
+    """提交风险测评：服务端复算分数 → 归档 → 更新账户当前等级。"""
+    total, level = compute_risk(payload.answers)
+    # 答案为空但给了分数（兼容旧客户端直接赋值），退回按分数折算
+    if not payload.answers and payload.score is not None:
+        total = int(payload.score)
+        level = score_to_level(total)
+
+    rec = RiskAssessment(
+        user_id=user.id,
+        version=payload.version,
+        score=total,
+        level=level,
+        answers=json.dumps(payload.answers[:32], separators=(",", ":")),
+        source="client",
+        assessed_at=time.time(),
+    )
+    session.add(rec)
+
+    user.risk_level = level
     user.updated_at = time.time()
     session.add(user)
     session.commit()
-    return {"risk_level": user.risk_level}
+    session.refresh(rec)
+    return {
+        "risk_level": level,
+        "score": total,
+        "assessed_at": rec.assessed_at,
+        "assessment_id": rec.id,
+    }
 
 
-@router.post("/reset")
-def reset_account(session: Session = Depends(get_session), user: User = Depends(current_user)) -> dict:
-    """演示用：清空该账户的持仓/委托/成交并恢复初始资金。"""
-    from ..models import Order, OrderStatus
-    from ..config import settings
+@router.get("/risk", dependencies=[Depends(signed_request)])
+def get_risk(session: Session = Depends(get_session), user: User = Depends(current_user)) -> dict:
+    """读取当前风险画像：最新一条测评 + 历史条数。
 
-    for p in session.exec(select(Position).where(Position.user_id == user.id)).all():
-        session.delete(p)
-    for t in session.exec(select(Trade).where(Trade.user_id == user.id)).all():
-        session.delete(t)
-    for o in session.exec(select(Order).where(Order.user_id == user.id)).all():
-        session.delete(o)
-    for f in session.exec(select(CashFlow).where(CashFlow.user_id == user.id)).all():
-        session.delete(f)
-
-    base = float(settings.seed_cash) if user.role.value == "retail" else user.total_asset or 50_000_000
-    user.cash = base
-    user.frozen_cash = 0.0
-    user.market_value = 0.0
-    user.total_asset = base
-    user.realized_pnl = 0.0
-    user.fee_paid = 0.0
-    user.updated_at = time.time()
-    session.add(user)
-    session.commit()
-    return {"ok": True, "cash": user.cash}
+    未测评时返回 assessed=False，且不编造等级，
+    客户端据此决定「展示结论」还是「引导去做测评」。
+    """
+    rows = session.exec(
+        select(RiskAssessment)
+        .where(RiskAssessment.user_id == user.id)
+        .order_by(RiskAssessment.assessed_at.desc())
+    ).all()
+    if not rows:
+        return {"assessed": False, "risk_level": 0, "history_count": 0}
+    latest = rows[0]
+    return {
+        "assessed": True,
+        "risk_level": latest.level,
+        "score": latest.score,
+        "version": latest.version,
+        "assessed_at": latest.assessed_at,
+        "history_count": len(rows),
+    }

@@ -238,3 +238,25 @@ class RevokedToken(SQLModel, table=True):
 
 def utc_str(ts: float | None = None) -> str:
     return datetime.fromtimestamp(ts or now_ts()).strftime("%Y-%m-%d %H:%M:%S")
+
+class RiskAssessment(SQLModel, table=True):
+    """风险测评档案：每次提交存一条完整快照，保留历史以便复核与追溯。
+
+    为什么单独建表而不是只更新 User.risk_level
+    ----------------------------------------
+    User.risk_level 只有一个数字，既不知道「什么时候测的」，也不知道
+    「测的时候答了什么」，更无法区分「用户真的选了保守」与「从来没测过」。
+    实盘业务里风评结果是适当性管理的凭证，必须可回溯，因此这里按次存档：
+      · 每次提交写一行，含问卷版本、总分、折算等级、原始答案、测评时间；
+      · 账户当前等级取「最新一条」，由 User.risk_level 冗余保存以便快速查询；
+      · 问卷口径升级（version+1）后，旧档案仍保留但不再作为当前等级来源。
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    version: int = Field(default=1, index=True)   # 问卷版本
+    score: int = Field(default=0)                 # 原始总分
+    level: int = Field(default=1, index=True)     # 折算等级 1保守/2稳健/3进取
+    answers: str = Field(default="[]", max_length=600)  # JSON 数组，逐题选项下标
+    source: str = Field(default="client", max_length=16)  # client / admin
+    assessed_at: float = Field(default_factory=now_ts, index=True)

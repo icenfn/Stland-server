@@ -1,6 +1,8 @@
 """启动装配：内置标的注册、历史回填、种子账户、后台行情循环。"""
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 
@@ -14,6 +16,8 @@ from .engine.session import current_session
 from .models import AccountStatus, DailyBar, Role, Stock, SystemEvent, User
 from .security import hash_password
 from .services.trading import settle_all
+
+logger = logging.getLogger("stland.bootstrap")
 
 
 def ensure_stocks(session: Session) -> int:
@@ -134,21 +138,98 @@ def register_engine() -> None:
 
 
 def bootstrap() -> dict:
-    """完整冷启动：建表 → 标的 → 账户 → 历史 → 引擎注册。"""
+    """冷启动：只建表 + 把库里已有标的注册进行情引擎，绝不写入任何业务数据。
+
+    为什么不再自动注入
+    ----------------
+    旧实现每次启动都会把 28 支标的、3 个种子账户和历史 K 线写进库里。
+    这让「标准数据集」变成一个不可见的副作用：
+      · 运营刚在后台删掉的账户，重启又被加回来；
+      · 想从一个空库开始搭建自己的标的池，做不到；
+      · 也无法区分「系统自带的数据」与「运营自己录入的数据」。
+    现在启动只做两件必需的事：建表（幂等）、把库里已有标的注册进内存引擎。
+    数据初始化成为后台面板上一个显式按钮（见 admin.init_seed_data），
+    点一次注入一次，重复点也不会产生重复记录。
+    """
     init_db()
-    with session_scope() as session:
-        stocks_added = ensure_stocks(session)
-        users_added = ensure_users(session)
     register_engine()
     with session_scope() as session:
-        bars_added = ensure_history(session)
-        session.add(SystemEvent(kind="boot", message="系统启动：内置标的与账户初始化完成"))
-    return {
-        "stocks_added": stocks_added,
-        "users_added": users_added,
-        "daily_bars_added": bars_added,
-        "stocks_total": len(SEED_STOCKS),
-    }
+        # 唯一的启动写入：库中无管理员时创建引导管理员（否则无人能进后台）
+        ensure_admin(session)
+        stocks = len(session.exec(select(Stock)).all())
+        users = len(session.exec(select(User)).all())
+        session.add(SystemEvent(kind="boot", message=f"系统启动：当前 {stocks} 支标的、{users} 个账户"))
+    return {"stocks_total": stocks, "users_total": users, "seeded": False}
+
+
+def ensure_admin(session: Session) -> bool:
+    """首次运行引导：库里没有任何管理员时，创建一个可登录后台的引导账户。
+
+    为什么这个不能也交给「手动注入」
+    ----------------------------
+    取消启动注入以后，全新数据库是空的 —— 没有任何账户，也就没人能登录后台
+    去点那个「注入数据」按钮，形成死锁。因此这里保留唯一一个最小化的启动写入：
+    仅当「所有管理员都不存在」时创建 1 个引导管理员，供运营首次进入后台。
+    它不同于自动注入数据集：不创建标的、不创建零售/机构账户、不建日线，
+    而且一旦库里已有管理员就什么都不做。账号密码可用环境变量覆盖。
+    """
+    admins = session.exec(select(User).where(User.role == Role.ADMIN)).all()
+    if admins:
+        return False
+    from .security import hash_password
+
+    password = os.getenv("STLAND_BOOTSTRAP_ADMIN_PASSWORD", "stland-admin")
+    user = User(
+        username=os.getenv("STLAND_BOOTSTRAP_ADMIN_USERNAME", "admin"),
+        display_name="系统管理员",
+        password_hash=hash_password(password),
+        role=Role.ADMIN,
+        status=AccountStatus.ACTIVE,
+        cash=0.0,
+        total_cash_in=0.0,
+        total_asset=0.0,
+        credit_limit=0.0,
+        risk_level=1,
+    )
+    session.add(user)
+    session.add(
+        SystemEvent(
+            kind="bootstrap_admin",
+            message="首次启动：创建引导管理员，用于进入后台并手动初始化数据",
+        )
+    )
+    session.commit()
+    logger.warning("已创建引导管理员 %s（请立即登录后台修改密码）", user.username)
+    return True
+
+
+def init_seed_data(include_stocks: bool = True, include_users: bool = True, include_history: bool = True) -> dict:
+    """后台「初始化数据」按钮的实现：显式注入标准数据集（幂等）。
+
+    放在这里而不是启动流程里，是因为它是一次**管理动作**：
+    运营决定什么时候、注入哪一部分数据，并能在审计日志里看到谁点的。
+    """
+    result = {"stocks_added": 0, "users_added": 0, "daily_bars_added": 0}
+    with session_scope() as session:
+        if include_stocks:
+            result["stocks_added"] = ensure_stocks(session)
+        if include_users:
+            result["users_added"] = ensure_users(session)
+    register_engine()
+    with session_scope() as session:
+        if include_history:
+            result["daily_bars_added"] = ensure_history(session)
+        session.add(
+            SystemEvent(
+                kind="seed",
+                message=(
+                    "手动初始化数据："
+                    f"标的 +{result['stocks_added']}、账户 +{result['users_added']}、"
+                    f"日线 +{result['daily_bars_added']}"
+                ),
+            )
+        )
+    return result
 
 
 _engine_thread: threading.Thread | None = None
