@@ -177,10 +177,6 @@ class Stock(SQLModel, table=True):
     total_shares: float = Field(default=1e9)   # 总股本（股）
     float_shares: float = Field(default=5e8)   # 流通股本（股）
     is_st: bool = Field(default=False)
-    # 是否已下架。用「软删除 + 标记」而不是物理删除：种子注入按代码去重，
-    # 看到这一行就不会把运营下架的标的加回来 —— 这件事只需要标的自己的状态，
-    # 不需要任何事件/日志表来代记。
-    delisted: bool = Field(default=False, index=True)
 
     # 模拟器参数（研究结论落到参数上）
     init_price: float = Field(default=10.0)

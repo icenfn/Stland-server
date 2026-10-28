@@ -57,12 +57,53 @@ def _purge_legacy() -> None:
             pass
 
 
+def _align_columns() -> None:
+    """给已存在的表补上模型里新增的列（只加不删，SQLite 的安全子集）。
+
+    为什么需要这一步：`create_all` 只建「不存在的表」，对「已存在但少了列」的表
+    什么都不做。上一版新增 `stock.delisted` 后，线上旧库启动即报
+    `no such column: stock.delisted`，服务直接起不来 —— 这种崩溃完全可以在
+    启动阶段自愈，不必依赖手工删库。
+
+    这里只做「加列」这一种安全变更：缺失的列按模型定义补上（NOT NULL 带默认值时
+    用 DEFAULT 填充存量行）。删列/改类型不在此处理 —— 那属于真正的不兼容变更，
+    应由 `_purge_legacy` 显式的重建逻辑承担。
+    """
+    from sqlalchemy import inspect
+
+    from . import models  # noqa: F401  触发元数据注册
+
+    insp = inspect(engine)
+    existing_tables = set(insp.get_table_names())
+
+    with engine.begin() as conn:
+        for table in SQLModel.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in have:
+                    continue
+                ddl_type = column.type.compile(dialect=engine.dialect)
+                default = ""
+                if column.default is not None and getattr(column.default, "is_scalar", False):
+                    value = column.default.arg
+                    if isinstance(value, str):
+                        default = f" DEFAULT '{value}'"
+                    elif isinstance(value, bool):
+                        default = f" DEFAULT {int(value)}"
+                    elif isinstance(value, (int, float)):
+                        default = f" DEFAULT {value}"
+                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {ddl_type}{default}'))
+
+
 def init_db() -> None:
-    """建表（幂等）并清理旧结构。"""
+    """建表（幂等）、对齐新增列，并清理旧结构。"""
     from . import models  # noqa: F401  触发元数据注册
 
     _purge_legacy()
     SQLModel.metadata.create_all(engine)
+    _align_columns()
 
 
 def get_session() -> Iterator[Session]:

@@ -33,7 +33,8 @@ def ensure_stocks(session: Session) -> int:
     「默认值」而不是「真值」：
       · 库里没有该代码 → 按种子插入；
       · 库里已有 → 原样保留（名字、参数、上下架状态都不动）；
-      · 运营下架过的代码 → 行上 `delisted=True`，不自动复活。
+      · 运营删除过的代码 → 行已不存在，但会被这里重新注入（这是刻意取舍：
+        种子只是「默认值」，需要彻底删掉某支标的请在删除后不再改动种子）。
     """
     existing = {s.code for s in session.exec(select(Stock)).all()}
 

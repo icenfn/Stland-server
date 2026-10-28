@@ -31,6 +31,7 @@ from ..models import (
     Order,
     OrderStatus,
     Position,
+    QuoteTick,
     Role,
     Stock,
     Trade,
@@ -569,15 +570,9 @@ def create_stock(
     session: Session = Depends(get_session),
     admin: Admin = Depends(admin_user),
 ) -> dict:
-    # 下架的标的是软删除：行还在库里，只是 `delisted=True`。
-    # 因此「新增同代码」要分两种情况 —— 已下架的视为复活（覆盖参数、清标记），
-    # 只有仍在架上的才算真重复。否则下架后就永远加不回来，运营动作不可逆。
-    existing = session.get(Stock, payload.code)
-    if existing is not None and not existing.delisted:
+    if session.get(Stock, payload.code) is not None:
         raise HTTPException(400, detail={"code": "DUP_CODE", "message": f"标的 {payload.code} 已存在"})
-
-    stock = _apply(existing or Stock(code=payload.code, tick_size=0.01, lot_size=100), payload)
-    stock.delisted = False
+    stock = _apply(Stock(code=payload.code, tick_size=0.01, lot_size=100), payload)
     session.add(stock)
     session.commit()
     _register(stock)
@@ -618,10 +613,16 @@ def delete_stock(
             400,
             detail={"code": "STOCK_HELD", "message": f"仍有 {len(held)} 个账户持有该标的，请先处理持仓"},
         )
-    # 软下架而不是物理删除：行留着，`delisted` 标记本身就是「运营不要这支」的事实。
-    # bootstrap 按代码去重，看到这一行就不会再把种子标的加回来。
-    stock.delisted = True
-    session.add(stock)
+    # 真删除：这一步就是「这支不要了」，不做软删除、不留下架标记。
+    # 先清掉依附在这支标的上的行情与自选成分 —— 委托与成交流水属于账户侧历史，
+    # 保留不动，删标的不能让别人的对账记录跟着消失。
+    for model in (DailyBar, QuoteTick):
+        for row in session.exec(select(model).where(model.code == code)).all():
+            session.delete(row)
+    for row in session.exec(select(WatchItem).where(WatchItem.code == code)).all():
+        session.delete(row)
+
+    session.delete(stock)
     session.commit()
     market_engine.unregister(code)
     return {"ok": True}

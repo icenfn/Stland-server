@@ -350,8 +350,9 @@ td .empty,.empty{color:var(--text-3); text-align:center; padding:18px 0;}
       <div class="panel">
         <h3>手动注入标准数据集</h3>
         <p class="muted" style="font-size:11px; margin:0 0 10px;">
-          启动时不再自动写入任何业务数据。下面三项都幂等：重复点击不会产生重复记录；
-          运营改过的标的参数、已删除的标的不会被覆盖或复活。
+          启动时不再自动写入任何业务数据。下面三项都幂等：重复点击不会产生重复记录，
+          运营改过的标的参数也不会被覆盖。标的是真删除（不留标记），所以删掉的
+          内置默认标的会在下次注入时被重新加回 —— 想彻底不要，删完不要再点注入。
         </p>
         <div class="row" style="gap:16px; margin-bottom:12px;">
           <label class="row" style="gap:6px;"><input type="checkbox" id="seedStocks" checked /> 默认标的</label>
@@ -837,7 +838,7 @@ async function loadStocks() {
         <td class="num"><span class="pill ${cls}">${chg != null ? pct(chg) : '--'}</span></td>
         <td class="num">${num(s.limit_up)}</td><td class="num">${num(s.limit_down)}</td>
         <td class="num">${num(s.vol)}</td><td class="num">${num(s.beta)}</td>
-        <td><button class="btn btn-danger" data-dels="${esc(s.code)}" data-name="${esc(s.name)}">下线</button></td>
+        <td><button class="btn btn-danger" data-dels="${esc(s.code)}" data-name="${esc(s.name)}">删除</button></td>
       </tr>`;
     }).join('');
   } catch (e) {
@@ -877,10 +878,10 @@ $('refreshIdx').addEventListener('click', loadIndices);
 $('stockBody').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-dels]');
   if (!b) return;
-  if (!confirm(`确认下线标的 ${b.dataset.dels} ${b.dataset.name}？\n有持仓时会被拒绝，请先处理持仓。`)) return;
+  if (!confirm(`确认删除标的 ${b.dataset.dels} ${b.dataset.name}？\n会一并清除该标的的行情与自选成分，不可撤销；有持仓时会被拒绝，请先处理持仓。`)) return;
   try {
     await api(`/api/admin/stocks/${encodeURIComponent(b.dataset.dels)}`, { method: 'DELETE' });
-    banner('标的已下线');
+    banner('标的已删除');
     loadStocks();
   } catch (err) { banner(err.message, 'err'); }
 });
