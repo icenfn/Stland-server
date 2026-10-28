@@ -20,7 +20,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
-from ..models import Stock
+from ..models import DailyBar, Stock
 from .market import market_engine
 
 
@@ -86,14 +86,25 @@ def index_quote(session: Session, meta: IndexMeta) -> dict:
     quotes = market_engine.quotes()
 
     ratios: list[float] = []
+    opens: list[float] = []
+    highs: list[float] = []
+    lows: list[float] = []
     amount = 0.0
+    volume = 0.0
     up = down = flat = 0
     for s in members:
         q = quotes.get(s.code)
         if not q or float(q.get("prev_close") or 0) <= 0:
             continue
-        ratios.append(float(q["price"]) / float(q["prev_close"]))
+        prev = float(q["prev_close"])
+        ratios.append(float(q["price"]) / prev)
+        # 开高低同样按「对昨收的比值」合成，这样与点位同一口径，
+        # 不会出现最高价比当前点位还低的矛盾数据。
+        opens.append(float(q.get("open") or prev) / prev)
+        highs.append(float(q.get("high") or prev) / prev)
+        lows.append(float(q.get("low") or prev) / prev)
         amount += float(q.get("amount") or 0.0)
+        volume += float(q.get("volume") or 0.0)
         chg = float(q.get("change_pct") or 0.0)
         if chg > 0:
             up += 1
@@ -115,6 +126,7 @@ def index_quote(session: Session, meta: IndexMeta) -> dict:
             "change": 0.0,
             "change_pct": 0.0,
             "amount": 0.0,
+            "volume": 0,
             "up": 0,
             "down": 0,
             "flat": 0,
@@ -122,22 +134,24 @@ def index_quote(session: Session, meta: IndexMeta) -> dict:
             "is_index": True,
         }
 
-    level = sum(ratios) / len(ratios) * meta.base
+    n = len(ratios)
+    level = sum(ratios) / n * meta.base
     return {
         "code": meta.code,
         "name": meta.name,
         "price": round(level, 2),
         "prev_close": meta.base,
-        "open": round(level, 2),
-        "high": round(max(level, meta.base), 2),
-        "low": round(min(level, meta.base), 2),
+        "open": round(sum(opens) / n * meta.base, 2),
+        "high": round(sum(highs) / n * meta.base, 2),
+        "low": round(sum(lows) / n * meta.base, 2),
         "change": round(level - meta.base, 2),
         "change_pct": round((level / meta.base - 1) * 100, 2),
         "amount": round(amount, 2),
+        "volume": int(volume),
         "up": up,
         "down": down,
         "flat": flat,
-        "members": len(ratios),
+        "members": n,
         "is_index": True,
     }
 
@@ -150,8 +164,7 @@ def index_minutes(session: Session, meta: IndexMeta, limit: int = 240) -> list[d
     """
     members = _members(session, meta)
     quotes = market_engine.quotes()
-    series: list[list[tuple[int, float]]] = []
-    prev_map: dict[str, float] = {}
+    series: list[list[tuple[int, float, float]]] = []
     for s in members:
         q = quotes.get(s.code) or {}
         prev = float(q.get("prev_close") or 0)
@@ -160,8 +173,10 @@ def index_minutes(session: Session, meta: IndexMeta, limit: int = 240) -> list[d
         bars = market_engine.minute_series(s.code, limit)
         if not bars:
             continue
-        prev_map[s.code] = prev
-        series.append([(int(b["t"]), float(b["price"]) / prev) for b in bars])
+        # 第三项是该分钟的成交量：指数没有自己的成交，量能只能由成分合计得到
+        series.append(
+            [(int(b["t"]), float(b["price"]) / prev, float(b.get("volume") or 0.0)) for b in bars]
+        )
 
     if not series:
         return []
@@ -172,7 +187,8 @@ def index_minutes(session: Session, meta: IndexMeta, limit: int = 240) -> list[d
     for i in range(n):
         ts = series[0][i][0]
         ratio = sum(x[i][1] for x in series) / len(series)
-        out.append({"t": ts, "price": round(ratio * meta.base, 2)})
+        vol = sum(x[i][2] for x in series)
+        out.append({"t": ts, "price": round(ratio * meta.base, 2), "volume": int(vol)})
     return out
 
 
@@ -195,8 +211,71 @@ def index_kline(session: Session, meta: IndexMeta, period: str = "1min", limit: 
                 "high": max(prices),
                 "low": min(prices),
                 "close": prices[-1],
-                "volume": 0,
+                # 量能随周期累加，否则成交量副图对指数恒为一条 0 轴
+                "volume": int(sum(float(c.get("volume") or 0.0) for c in chunk)),
                 "amount": 0.0,
+            }
+        )
+    return bars[-limit:]
+
+
+def index_daily(session: Session, meta: IndexMeta, limit: int = 120) -> list[dict]:
+    """指数日线：由成分股日线等权合成。
+
+    做法与分时一致 —— 每支成分先按「对首日收盘的比值」归一化，再取均值乘基准点位，
+    这样不同价的成分不会被高价股主导。量额直接取成分合计。
+    """
+    members = _members(session, meta)
+    if not members:
+        return []
+    codes = [s.code for s in members]
+    rows = session.exec(
+        select(DailyBar).where(DailyBar.code.in_(codes)).order_by(DailyBar.trade_date)
+    ).all()
+    if not rows:
+        return []
+
+    by_code: dict[str, dict[str, DailyBar]] = {}
+    for r in rows:
+        by_code.setdefault(r.code, {})[r.trade_date] = r
+
+    base_close: dict[str, float] = {}
+    for code, days in by_code.items():
+        first = days[min(days)]
+        if first.close > 0:
+            base_close[code] = first.close
+
+    dates = sorted({r.trade_date for r in rows})
+    bars: list[dict] = []
+    for d in dates:
+        ratios: list[float] = []
+        opens: list[float] = []
+        highs: list[float] = []
+        lows: list[float] = []
+        volume = 0
+        amount = 0.0
+        for code, base in base_close.items():
+            bar = by_code[code].get(d)
+            if bar is None or bar.close <= 0:
+                continue
+            ratios.append(bar.close / base)
+            opens.append((bar.open or bar.close) / base)
+            highs.append((bar.high or bar.close) / base)
+            lows.append((bar.low or bar.close) / base)
+            volume += int(bar.volume or 0)
+            amount += float(bar.amount or 0.0)
+        if not ratios:
+            continue
+        k = len(ratios)
+        bars.append(
+            {
+                "time": d,
+                "open": round(sum(opens) / k * meta.base, 2),
+                "high": round(sum(highs) / k * meta.base, 2),
+                "low": round(sum(lows) / k * meta.base, 2),
+                "close": round(sum(ratios) / k * meta.base, 2),
+                "volume": volume,
+                "amount": round(amount, 2),
             }
         )
     return bars[-limit:]

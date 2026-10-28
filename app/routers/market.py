@@ -146,6 +146,7 @@ def index_detail(code: str, session: Session = Depends(get_session)) -> dict:
     meta = index_engine.get_index(code)
     quote = index_engine.index_quote(session, meta)
     members = index_engine._members(session, meta)  # noqa: SLF001 - 同包内复用以统计成分
+    live = market_engine.quotes()  # 成分列表直接带报价，避免客户端逐支再请求一遍
     return {
         "quote": quote,
         "meta": {
@@ -166,7 +167,14 @@ def index_detail(code: str, session: Session = Depends(get_session)) -> dict:
             "note": meta.note,
         },
         "members": [
-            {"code": s.code, "name": s.name, "board": s.board, "industry": s.industry}
+            {
+                "code": s.code,
+                "name": s.name,
+                "board": s.board,
+                "industry": s.industry,
+                "price": round(float(live.get(s.code, {}).get("price") or 0), 2),
+                "change_pct": round(float(live.get(s.code, {}).get("change_pct") or 0), 2),
+            }
             for s in members[:40]
         ],
     }
@@ -185,10 +193,13 @@ def index_kline(
     limit: int = Query(default=120, ge=10, le=500),
     session: Session = Depends(get_session),
 ) -> dict:
-    """指数 K 线。日线由分时合成后按自然日聚合（模拟盘只有一个交易日的分钟数据时退回分时聚合）。"""
+    """指数 K 线。日线由成分股日线等权合成，分钟级由合成分时聚合。"""
     meta = index_engine.get_index(code)
     if period == "day":
-        items = index_engine.index_kline(session, meta, period="60min", limit=limit)
+        items = index_engine.index_daily(session, meta, limit=limit)
+        if not items:
+            # 历史日线还没回填时退回分钟聚合，保证图不是空的
+            items = index_engine.index_kline(session, meta, period="60min", limit=limit)
     else:
         items = index_engine.index_kline(session, meta, period=period, limit=limit)
     return {"code": meta.code, "period": period, "items": items}

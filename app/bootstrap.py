@@ -97,8 +97,44 @@ def ensure_users(session: Session) -> int:
     return added
 
 
+def _broken_codes(session: Session) -> set[str]:
+    """找出历史日线明显异常（上一版生成器缺陷留下的）标的。
+
+    判定只用两条与业务无关的硬事实：收盘价必须为正，且整段的量级不能离谱。
+    正常个股 240 天内不会出现「首日 1e15、末日 10 元」这种跨度，
+    出现即说明数据是坏的，重建比留着更安全 —— 留着会让指数/图表直接归零。
+    """
+    broken: set[str] = set()
+    rows = session.exec(select(DailyBar)).all()
+    if not rows:
+        return broken
+    by_code: dict[str, list[DailyBar]] = {}
+    for r in rows:
+        by_code.setdefault(r.code, []).append(r)
+    for code, bars in by_code.items():
+        closes = sorted(((b.trade_date, b.close) for b in bars), key=lambda x: x[0])
+        first, last = closes[0][1], closes[-1][1]
+        if first <= 0 or last <= 0:
+            broken.add(code)
+            continue
+        if first > 1e5 or last > 1e5:
+            broken.add(code)
+            continue
+        # 首末价跨度过大（>20 倍或 <1/20）同样视为坏数据
+        if first / last > 20 or last / first > 20:
+            broken.add(code)
+    return broken
+
+
 def ensure_history(session: Session) -> int:
-    """为「库内所有缺少日线」的标的回填历史 K 线。"""
+    """为「库内缺日线」或「日线明显异常」的标的回填历史 K 线。"""
+    broken = _broken_codes(session)
+    if broken:
+        for code in broken:
+            for row in session.exec(select(DailyBar).where(DailyBar.code == code)).all():
+                session.delete(row)
+        session.commit()
+
     have = {row.code for row in session.exec(select(DailyBar)).all()}
     added = 0
     for stock in session.exec(select(Stock)).all():

@@ -216,15 +216,25 @@ class MarketEngine:
             rng = random.Random(f"stland-{code}")
             dates = trading_days(days)
             dt = 1 / 252
-            cond = st.vol ** 2
+            # GARCH(1,1)：长期方差取「年化波动率² × dt」，权重 0.06/0.92/0.02 之和为 1，
+            # 因此条件方差会围绕长期方差波动，不会漂移。
+            #
+            # 上一版这里写成 `0.02 * (path[-1] * 0.0 + 1)` —— 最后一项是**常数量 0.02**，
+            # 相当于给方差加了一个与波动率无关的固定底盘，稳态方差被顶到 ≈0.25，
+            # 折算年化波动率约 794%。反向回溯 240 天后 base 被放大到 1e15 量级，
+            # 指数按「对首日收盘归一化」合成时比值趋近 0，整条日线归零。
+            var_long = max((st.vol ** 2) * dt, 1e-8)
+            cond = var_long
+            prev_ret = 0.0
             price = st.prev_close
             # 反向生成：从当前价回溯过去，再翻转，保证最后一根接近今日价
             path: list[float] = [price]
             for _ in range(days):
                 z = rng.gauss(0, 1)
-                cond = 0.06 * (st.vol ** 2) * dt + 0.92 * cond + 0.02 * (path[-1] * 0.0 + 1)
-                sigma = max(0.004, math.sqrt(max(cond, 1e-8)) * math.sqrt(252))
-                ret = (st.drift - 0.5 * sigma ** 2) * dt + sigma * math.sqrt(dt) * z
+                cond = 0.02 * var_long + 0.06 * (prev_ret ** 2) + 0.92 * cond
+                sigma = max(0.002, math.sqrt(max(cond, 1e-12)))
+                ret = st.drift * dt + sigma * z
+                prev_ret = ret
                 if rng.random() < 0.02:
                     ret += rng.choice([-1, 1]) * rng.uniform(0.02, 0.06)
                 path.append(max(st.price * 0.15, path[-1] / math.exp(ret)))
