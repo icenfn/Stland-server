@@ -1,6 +1,16 @@
-"""SQLModel 数据模型：账户、股票、行情、订单、成交、持仓、资金流水、风控、审计。
+"""SQLModel 数据模型。
 
-所有金额一律使用「分」为最小单位的 float（内部统一 4 位小数四舍五入存储），
+表结构（本轮重构，不再兼容旧版本数据库）
+------------------------------------------------
+· ``user``   —— 零售 + 机构共用的**一张**交易账户表，靠 ``role`` 区分；
+· ``admin``  —— 管理员**独立**的一张表，不参与交易、没有资金与持仓；
+· 交易类表（订单/成交/持仓/流水）只关联 ``user``，管理员天然不产生交易数据；
+· 删除审计日志（AuditLog）与风险测评历史档案（RiskAssessment）：
+  风险偏好直接记在 ``user`` 上（等级 + 总分 + 测评时间），不再单独留档。
+· 新增 ``setting``：后台可在线修改的运行期配置；
+· 新增 ``watch_group`` / ``watch_item``：自选股分组与成分。
+
+金额一律以「元」为单位的 float，内部统一 4 位小数四舍五入存储，
 避免 SQLite 浮点误差在账务上累积。
 """
 from __future__ import annotations
@@ -18,11 +28,10 @@ def now_ts() -> float:
 
 
 class Role(str, Enum):
-    """客户端三种形态共用一套账号体系。"""
+    """交易账户类型：只有零售与机构两种。管理员已迁到独立表。"""
 
-    RETAIL = "retail"          # 普通零售
+    RETAIL = "retail"            # 普通零售
     INSTITUTION = "institution"  # 机构专业
-    ADMIN = "admin"            # 管理端
 
 
 class AccountStatus(str, Enum):
@@ -50,7 +59,16 @@ class OrderStatus(str, Enum):
 
 
 class User(SQLModel, table=True):
-    """统一账户。资金/持仓归属账户，管理员亦为账户（role=admin）。"""
+    """交易账户（零售 + 机构共用）。
+
+    为什么合成一张表：零售与机构除了 ``credit_limit``（融资额度）之外，
+    字段、账务、撮合、结算流程完全一致，拆成两张表只会让交易链路到处 if/else。
+    差异用一个可空语义的默认值 + ``role`` 表达即可。
+
+    风险偏好：``risk_level`` / ``risk_score`` / ``risk_assessed_at`` 三个字段
+    直接落在账户行上。不再建测评历史表 —— 业务只需要「当前偏好是什么、什么时候测的」，
+    历史档案属于合规留痕，与本产品要解决的问题无关。
+    """
 
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(index=True, unique=True, max_length=40)
@@ -66,9 +84,13 @@ class User(SQLModel, table=True):
     realized_pnl: float = Field(default=0.0)    # 已实现盈亏
     fee_paid: float = Field(default=0.0)        # 累计费用
 
-    # 机构账户专有额度
-    credit_limit: float = Field(default=0.0)    # 可用融资额度
-    risk_level: int = Field(default=1)          # 1 保守 / 2 稳健 / 3 进取
+    # 机构账户专有额度（零售恒为 0）
+    credit_limit: float = Field(default=0.0)
+
+    # 风险偏好（0 = 从未测评）
+    risk_level: int = Field(default=0)              # 0 未测评 / 1 保守 / 2 稳健 / 3 进取
+    risk_score: int = Field(default=0)              # 最近一次测评总分
+    risk_assessed_at: float = Field(default=0.0)    # 最近一次测评时间（0 表示未测评）
 
     fail_count: int = Field(default=0)          # 连续登录失败次数
     locked_until: float = Field(default=0.0)    # 锁定到期时间戳
@@ -76,6 +98,64 @@ class User(SQLModel, table=True):
 
     created_at: float = Field(default_factory=now_ts)
     updated_at: float = Field(default_factory=now_ts)
+
+
+class Admin(SQLModel, table=True):
+    """管理员账户（独立表）。
+
+    与交易账户彻底分开的三个理由：
+      1) 管理员不参与撮合、没有资金/持仓/流水，混在 ``user`` 里会让每个查询
+         都要额外过滤 ``role != admin``，容易漏；
+      2) 管理员登录后只调 ``/api/admin/*``，与交易链路的鉴权完全隔离，
+         即使交易侧出问题也不会把后台带崩；
+      3) 运营看「账户列表」时不需要再屏蔽管理员。
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    username: str = Field(index=True, unique=True, max_length=40)
+    display_name: str = Field(default="", max_length=40)
+    password_hash: str = Field(default="")
+    is_active: bool = Field(default=True)
+
+    fail_count: int = Field(default=0)
+    locked_until: float = Field(default=0.0)
+    last_login_at: float = Field(default=0.0)
+
+    created_at: float = Field(default_factory=now_ts)
+    updated_at: float = Field(default_factory=now_ts)
+
+
+class Setting(SQLModel, table=True):
+    """运行期配置项：后台面板可改，改完立即生效（不需重启）。
+
+    只存「允许运营调整」的白名单键，具体清单与校验见 ``app/runtime_config.py``。
+    存字符串，读取时按目标类型转换，避免 SQLite 类型混乱。
+    """
+
+    key: str = Field(primary_key=True, max_length=40)
+    value: str = Field(default="", max_length=200)
+    updated_at: float = Field(default_factory=now_ts)
+    updated_by: str = Field(default="", max_length=40)
+
+
+class WatchGroup(SQLModel, table=True):
+    """自选股分组（每个账户私有）。"""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    name: str = Field(max_length=20)
+    sort: int = Field(default=0)
+    created_at: float = Field(default_factory=now_ts)
+
+
+class WatchItem(SQLModel, table=True):
+    """自选股成分：一支股票在同一账户下只属于一个分组（唯一约束见服务层）。"""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    group_id: int = Field(index=True)
+    code: str = Field(index=True, max_length=12)
+    created_at: float = Field(default_factory=now_ts)
 
 
 class Stock(SQLModel, table=True):
@@ -206,20 +286,8 @@ class CashFlow(SQLModel, table=True):
     created_at: float = Field(default_factory=now_ts, index=True)
 
 
-class AuditLog(SQLModel, table=True):
-    """管理端与安全相关操作留痕，满足上线审计需求。"""
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: Optional[int] = Field(default=None, index=True)
-    username: str = Field(default="", max_length=40)
-    action: str = Field(max_length=40, index=True)
-    detail: str = Field(default="", max_length=400)
-    ip: str = Field(default="", max_length=60)
-    created_at: float = Field(default_factory=now_ts, index=True)
-
-
 class SystemEvent(SQLModel, table=True):
-    """系统级事件（开盘/收盘/熔断/风控冻结），供管理端时间线使用。"""
+    """系统级事件（开盘/收盘/启动/初始化），供管理端时间线使用。"""
 
     id: Optional[int] = Field(default=None, primary_key=True)
     kind: str = Field(max_length=24, index=True)
@@ -238,25 +306,3 @@ class RevokedToken(SQLModel, table=True):
 
 def utc_str(ts: float | None = None) -> str:
     return datetime.fromtimestamp(ts or now_ts()).strftime("%Y-%m-%d %H:%M:%S")
-
-class RiskAssessment(SQLModel, table=True):
-    """风险测评档案：每次提交存一条完整快照，保留历史以便复核与追溯。
-
-    为什么单独建表而不是只更新 User.risk_level
-    ----------------------------------------
-    User.risk_level 只有一个数字，既不知道「什么时候测的」，也不知道
-    「测的时候答了什么」，更无法区分「用户真的选了保守」与「从来没测过」。
-    实盘业务里风评结果是适当性管理的凭证，必须可回溯，因此这里按次存档：
-      · 每次提交写一行，含问卷版本、总分、折算等级、原始答案、测评时间；
-      · 账户当前等级取「最新一条」，由 User.risk_level 冗余保存以便快速查询；
-      · 问卷口径升级（version+1）后，旧档案仍保留但不再作为当前等级来源。
-    """
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(index=True)
-    version: int = Field(default=1, index=True)   # 问卷版本
-    score: int = Field(default=0)                 # 原始总分
-    level: int = Field(default=1, index=True)     # 折算等级 1保守/2稳健/3进取
-    answers: str = Field(default="[]", max_length=600)  # JSON 数组，逐题选项下标
-    source: str = Field(default="client", max_length=16)  # client / admin
-    assessed_at: float = Field(default_factory=now_ts, index=True)

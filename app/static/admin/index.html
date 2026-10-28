@@ -5,310 +5,419 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Stland 运营后台</title>
 <style>
-  :root{
-    --bg:#0d1218; --panel:#151d26; --panel-2:#1b2531; --line:#243040;
-    --text:#e6edf5; --text-2:#9fb0c3; --text-3:#6b7c90;
-    --brand:#e8383d; --ok:#1cc477; --warn:#f0a020; --info:#3b82f6;
-    --radius:10px;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);
-    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-  button{font:inherit;cursor:pointer}
-  input,select{font:inherit}
+/* ------------------------------------------------------------------ *
+ * 运营后台：单文件、零依赖、纯原生 JS。
+ *
+ * 为什么不引框架：后台只有一个使用者（运营），页面是「表格 + 表单」，
+ * 引 React/Vue 反而要多一套构建与部署流程。单文件塞进 static/ 即可，
+ * 与服务端同源发布，不会出现版本错配。
+ * ------------------------------------------------------------------ */
+:root{
+  --bg:#0e141a; --panel:#161f28; --panel-2:#1c2733; --line:#26323e;
+  --text:#e6edf5; --text-2:#95a4b5; --text-3:#6b7c8f;
+  --accent:#e8383d; --ok:#2fbf7d; --warn:#e0a020; --info:#5b8def;
+  --radius:10px;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:13px; line-height:1.55;
+}
+button{font-family:inherit;}
+h1,h2,h3{margin:0;}
+.tabular{font-variant-numeric:tabular-nums;}
 
-  /* ---------- 登录 ---------- */
-  #login{min-height:100vh;display:grid;place-items:center;padding:24px}
-  .login-card{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--line);
-    border-radius:14px;padding:26px}
-  .login-card h1{margin:0 0 4px;font-size:19px;letter-spacing:.5px}
-  .login-card p{margin:0 0 18px;color:var(--text-3);font-size:12px}
-  .field{margin-bottom:12px}
-  .field label{display:block;font-size:12px;color:var(--text-2);margin-bottom:5px}
-  .field input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);
-    background:var(--bg);color:var(--text);outline:none}
-  .field input:focus{border-color:var(--brand)}
-  .btn{border:none;border-radius:8px;padding:9px 14px;background:var(--panel-2);
-    color:var(--text);font-size:13px;font-weight:600}
-  .btn:hover{filter:brightness(1.15)}
-  .btn-primary{background:var(--brand);color:#fff}
-  .btn-ghost{background:transparent;border:1px solid var(--line);color:var(--text-2)}
-  .btn-danger{background:rgba(232,56,61,.16);color:#ff8b8d;border:1px solid rgba(232,56,61,.35)}
-  .btn-block{width:100%}
-  .btn:disabled{opacity:.5;cursor:not-allowed}
+/* 登录 */
+#login{display:grid; place-items:center; min-height:100vh; padding:24px;}
+.login-card{
+  width:100%; max-width:340px; background:var(--panel); border:1px solid var(--line);
+  border-radius:14px; padding:24px;
+}
+.login-card h1{font-size:17px; margin-bottom:4px;}
+.login-card .sub{color:var(--text-3); font-size:11px; margin-bottom:18px;}
+.field{margin-bottom:12px;}
+.field label{display:block; font-size:11px; color:var(--text-2); margin-bottom:5px;}
+.field input,.field select{
+  width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
+  color:var(--text); font-size:13px; padding:9px 10px; outline:none;
+}
+.field input:focus,.field select:focus{border-color:#3a4a5c;}
+.field .hint{font-size:10px; color:var(--text-3); margin-top:4px;}
+.btn{
+  border:1px solid var(--line); background:var(--panel-2); color:var(--text-2);
+  border-radius:8px; padding:7px 12px; font-size:12px; cursor:pointer;
+}
+.btn:hover{border-color:#3a4a5c; color:var(--text);}
+.btn:disabled{opacity:.5; cursor:not-allowed;}
+.btn-primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600;}
+.btn-primary:hover{filter:brightness(1.08); color:#fff;}
+.btn-ghost{background:transparent;}
+.btn-danger{color:#ff8b8d; border-color:rgba(232,56,61,.4);}
+.btn-danger:hover{background:rgba(232,56,61,.12); color:#ff8b8d;}
+.btn-block{width:100%; padding:10px;}
 
-  /* ---------- 主框架 ---------- */
-  #app{display:none;min-height:100vh}
-  header.top{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:14px;
-    padding:12px 20px;background:rgba(13,18,24,.92);backdrop-filter:blur(8px);
-    border-bottom:1px solid var(--line)}
-  .logo{font-size:16px;font-weight:800;letter-spacing:1.5px;
-    background:linear-gradient(120deg,#ff6b6d,#ffb45c);-webkit-background-clip:text;
-    background-clip:text;color:transparent}
-  .who{margin-left:auto;font-size:12px;color:var(--text-3)}
-  nav.tabs{display:flex;gap:4px;padding:0 20px;background:var(--panel);border-bottom:1px solid var(--line);
-    overflow-x:auto}
-  nav.tabs button{background:none;border:none;color:var(--text-3);font-size:13px;font-weight:600;
-    padding:11px 14px;border-bottom:2px solid transparent;white-space:nowrap}
-  nav.tabs button.on{color:var(--brand);border-bottom-color:var(--brand)}
-  main{padding:18px 20px 60px;max-width:1280px;margin:0 auto}
-  section.page{display:none}
-  section.page.on{display:block}
+/* 布局 */
+#app{display:none; min-height:100vh;}
+.topbar{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:10px 18px; border-bottom:1px solid var(--line); background:var(--panel);
+  position:sticky; top:0; z-index:20;
+}
+.brand{display:flex; align-items:center; gap:8px; font-weight:700; font-size:14px;}
+.brand .dot{width:7px; height:7px; border-radius:50%; background:var(--accent);}
+.topbar .who{color:var(--text-2); font-size:12px;}
+.tabs{display:flex; gap:2px; padding:0 14px; border-bottom:1px solid var(--line);
+  background:var(--panel); overflow-x:auto; position:sticky; top:45px; z-index:19;}
+.tabs button{
+  background:none; border:none; border-bottom:2px solid transparent; color:var(--text-3);
+  font-size:12px; padding:11px 12px; cursor:pointer; white-space:nowrap;
+}
+.tabs button.on{color:var(--text); border-bottom-color:var(--accent); font-weight:600;}
+main{padding:16px 18px 60px;}
+.page{display:none;}
+.page.on{display:block;}
+.panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px; margin-bottom:14px;}
+.panel h3{font-size:13px; margin-bottom:10px; display:flex; align-items:center; gap:8px;}
+.panel h3 .n{color:var(--text-3); font-weight:400; font-size:11px;}
+.row{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+.row-between{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;}
+.muted{color:var(--text-3);}
 
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-    padding:16px;margin-bottom:14px}
-  .card-h{display:flex;align-items:center;gap:10px;margin-bottom:12px}
-  .card-h h2{margin:0;font-size:14px;font-weight:700}
-  .card-h .sub{font-size:11px;color:var(--text-3)}
-  .card-h .right{margin-left:auto;display:flex;gap:8px}
+/* KPI */
+.kpis{display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px;}
+.kpi{background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:10px 12px;}
+.kpi .k{font-size:10px; color:var(--text-3);}
+.kpi .v{font-size:17px; font-weight:700; margin-top:2px; font-variant-numeric:tabular-nums;}
+.dist{display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px;}
+.dist-item{background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:9px 11px;}
+.dist-item .k{font-size:10px; color:var(--text-3);}
+.dist-item .v{font-size:15px; font-weight:700; margin-top:1px; font-variant-numeric:tabular-nums;}
 
-  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-  .kpi{background:var(--panel-2);border-radius:9px;padding:12px}
-  .kpi .k{font-size:11px;color:var(--text-3)}
-  .kpi .v{font-size:20px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
+/* 表格 */
+table{width:100%; border-collapse:collapse; font-size:12px;}
+th{
+  text-align:left; font-weight:500; color:var(--text-3); font-size:10px;
+  padding:7px 8px; border-bottom:1px solid var(--line); white-space:nowrap;
+}
+td{padding:8px; border-bottom:1px solid rgba(38,50,62,.6); vertical-align:middle;}
+tbody tr:hover{background:rgba(255,255,255,.02);}
+td.num{text-align:right; font-variant-numeric:tabular-nums;}
+td .empty,.empty{color:var(--text-3); text-align:center; padding:18px 0;}
+.pill{display:inline-block; font-size:10px; padding:2px 7px; border-radius:999px;
+  background:var(--panel-2); border:1px solid var(--line); color:var(--text-2);}
+.pill.ok{color:var(--ok); border-color:rgba(47,191,125,.35); background:rgba(47,191,125,.1);}
+.pill.warn{color:var(--warn); border-color:rgba(224,160,32,.35); background:rgba(224,160,32,.1);}
+.pill.info{color:var(--info); border-color:rgba(91,141,239,.35); background:rgba(91,141,239,.1);}
+.pill.bad{color:#ff8b8d; border-color:rgba(232,56,61,.35); background:rgba(232,56,61,.1);}
+.search{background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
+  color:var(--text); font-size:12px; padding:7px 10px; outline:none; min-width:180px;}
 
-  table{width:100%;border-collapse:collapse;font-size:12.5px}
-  th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
-  th{color:var(--text-3);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
-  td.num{font-variant-numeric:tabular-nums;text-align:right}
-  tr:hover td{background:rgba(255,255,255,.025)}
-  .scroll{overflow-x:auto}
+/* 配置项 */
+.cfg-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:10px;}
+.cfg{background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:10px 12px;}
+.cfg .t{display:flex; align-items:baseline; justify-content:space-between; gap:8px;}
+.cfg .t .lbl{font-size:12px; font-weight:600;}
+.cfg .t .key{font-size:9px; color:var(--text-3); font-family:ui-monospace,monospace;}
+.cfg .note{font-size:10px; color:var(--text-3); margin-top:3px; line-height:1.5;}
+.cfg input,.cfg select{width:100%; margin-top:6px; background:var(--panel); border:1px solid var(--line);
+  border-radius:7px; color:var(--text); font-size:12px; padding:6px 8px; outline:none;}
+.cfg.dirty{border-color:rgba(224,160,32,.55);}
 
-  .pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:20px;
-    font-size:11px;font-weight:600;background:rgba(255,255,255,.07);color:var(--text-2)}
-  .pill.ok{background:rgba(28,196,119,.15);color:#4ade9b}
-  .pill.warn{background:rgba(240,160,32,.15);color:#f5c26b}
-  .pill.bad{background:rgba(232,56,61,.15);color:#ff8b8d}
-  .pill.info{background:rgba(59,130,246,.15);color:#7aa9ff}
+/* 提示条 */
+.banner{
+  position:fixed; left:50%; bottom:22px; transform:translateX(-50%) translateY(20px);
+  background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+  padding:10px 16px; font-size:12px; opacity:0; pointer-events:none;
+  transition:opacity .2s, transform .2s; z-index:60; max-width:80vw;
+}
+.banner.show{opacity:1; transform:translateX(-50%) translateY(0);}
+.banner.ok{border-color:rgba(47,191,125,.5); color:var(--ok);}
+.banner.err{border-color:rgba(232,56,61,.5); color:#ff8b8d;}
 
-  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
-  .row .grow{flex:1 1 160px}
-  .row label{display:block;font-size:11px;color:var(--text-3);margin-bottom:4px}
-  .row input,.row select{width:100%;padding:8px 10px;border-radius:8px;
-    border:1px solid var(--line);background:var(--bg);color:var(--text);outline:none}
-
-  .empty{color:var(--text-3);font-size:12.5px;padding:18px 0;text-align:center}
-  .banner{padding:10px 12px;border-radius:8px;font-size:12.5px;margin-bottom:12px;display:none}
-  .banner.show{display:block}
-  .banner.ok{background:rgba(28,196,119,.13);color:#69e2a5}
-  .banner.err{background:rgba(232,56,61,.13);color:#ff8b8d}
-
-  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
-  .chip{background:var(--panel-2);border:1px solid var(--line);color:var(--text-2);
-    border-radius:20px;padding:5px 12px;font-size:12px;font-weight:600}
-  .chip.on{background:rgba(232,56,61,.15);border-color:rgba(232,56,61,.4);color:#ff8b8d}
-
-  .dist{display:flex;gap:8px;flex-wrap:wrap}
-  .dist-item{flex:1 1 120px;background:var(--panel-2);border-radius:9px;padding:10px 12px}
-  .dist-item .k{font-size:11px;color:var(--text-3)}
-  .dist-item .v{font-size:18px;font-weight:700;margin-top:2px}
-
-  .hint{font-size:11.5px;color:var(--text-3);line-height:1.7;margin:8px 0 0}
-  .modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;
-    place-items:center;z-index:50;padding:20px}
-  .modal-mask.show{display:grid}
-  .modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-    padding:20px;width:100%;max-width:460px}
-  .modal h3{margin:0 0 14px;font-size:15px}
+/* 弹窗 */
+.modal-mask{position:fixed; inset:0; background:rgba(0,0,0,.6); display:none;
+  place-items:center; z-index:50; padding:20px;}
+.modal-mask.show{display:grid;}
+.modal{background:var(--panel); border:1px solid var(--line); border-radius:12px;
+  padding:18px; width:100%; max-width:360px;}
+.modal h3{font-size:14px; margin-bottom:14px;}
 </style>
 </head>
 <body>
 
-<!-- ======== 登录 ======== -->
+<div id="banner" class="banner"></div>
+
+<!-- 登录 -->
 <div id="login">
   <form class="login-card" id="loginForm">
     <h1>Stland 运营后台</h1>
-    <p>使用管理员账户登录。零售与机构账户无法进入后台。</p>
-    <div class="banner err" id="loginErr"></div>
-    <div class="field">
-      <label>用户名</label>
-      <input id="username" autocomplete="username" placeholder="admin" required />
-    </div>
-    <div class="field">
-      <label>密码</label>
-      <input id="password" type="password" autocomplete="current-password" placeholder="••••••" required />
-    </div>
-    <button class="btn btn-primary btn-block" type="submit" id="loginBtn">登录</button>
+    <div class="sub">管理员独立账号，与交易账户互不相通</div>
+    <div class="field"><label>管理员账号</label><input id="username" autocomplete="username" required /></div>
+    <div class="field"><label>口令</label><input id="password" type="password" autocomplete="current-password" required /></div>
+    <div class="field"><button class="btn btn-primary btn-block" id="loginBtn" type="submit">登录</button></div>
+    <div id="loginErr" class="banner err" style="position:static; transform:none; opacity:0; display:block; margin-top:4px;"></div>
+    <p class="muted" style="font-size:10px; margin:10px 0 0; line-height:1.6;">
+      首次部署时系统会自动创建引导管理员（默认 admin / stland-admin），
+      登录后请立即在「账户」页签修改口令。
+    </p>
   </form>
 </div>
 
-<!-- ======== 主体 ======== -->
+<!-- 主界面 -->
 <div id="app">
-  <header class="top">
-    <span class="logo">STLAND</span>
-    <span class="sub" style="font-size:12px;color:var(--text-3)">运营后台</span>
-    <span class="who" id="who"></span>
-    <button class="btn btn-ghost" id="logoutBtn">退出</button>
-  </header>
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span>Stland 运营后台</div>
+    <div class="row">
+      <span class="who" id="who"></span>
+      <button class="btn btn-ghost" id="logoutBtn">退出</button>
+    </div>
+  </div>
 
-  <nav class="tabs" id="tabs">
+  <div class="tabs" id="tabs">
     <button data-tab="overview" class="on">总览</button>
-    <button data-tab="accounts">账户</button>
-    <button data-tab="stocks">标的</button>
-    <button data-tab="risk">风险画像</button>
+    <button data-tab="retail">零售账户</button>
+    <button data-tab="institution">机构账户</button>
+    <button data-tab="admins">管理员</button>
+    <button data-tab="stocks">标的与指数</button>
+    <button data-tab="risk">风险偏好</button>
+    <button data-tab="config">系统配置</button>
     <button data-tab="data">数据初始化</button>
-    <button data-tab="ops">撮合与审计</button>
-  </nav>
+    <button data-tab="ops">撮合与事件</button>
+  </div>
 
   <main>
-    <div class="banner" id="banner"></div>
-
     <!-- 总览 -->
     <section class="page on" id="page-overview">
-      <div class="card">
-        <div class="card-h">
-          <h2>运营总览</h2>
-          <span class="sub" id="sessionInfo"></span>
-          <div class="right"><button class="btn btn-ghost" id="refreshOv">刷新</button></div>
+      <div class="panel">
+        <div class="row-between">
+          <h3>运营总览 <span class="n" id="sessionInfo"></span></h3>
+          <button class="btn btn-ghost" id="refreshOv">刷新</button>
         </div>
         <div class="kpis" id="kpis"></div>
       </div>
-      <div class="card">
-        <div class="card-h"><h2>账户结构</h2><span class="sub">按角色分组</span></div>
+      <div class="panel">
+        <h3>账户结构</h3>
         <div class="dist" id="roleDist"></div>
       </div>
-    </section>
-
-    <!-- 账户 -->
-    <section class="page" id="page-accounts">
-      <div class="card">
-        <div class="card-h">
-          <h2>账户管理</h2>
-          <span class="sub" id="accCount"></span>
-          <div class="right">
-            <input id="accSearch" placeholder="搜索用户名" style="padding:7px 10px;border-radius:8px;
-              border:1px solid var(--line);background:var(--bg);color:var(--text);outline:none;width:150px" />
-            <button class="btn btn-primary" id="newAccBtn">新建账户</button>
-          </div>
-        </div>
-        <!-- 零售 / 机构 / 管理员 三套人群分开 -->
-        <div class="chips" id="roleChips">
-          <button class="chip on" data-role="retail">零售账户</button>
-          <button class="chip" data-role="institution">机构账户</button>
-          <button class="chip" data-role="admin">管理员</button>
-        </div>
-        <div class="scroll"><table>
-          <thead><tr>
-            <th>账户</th><th>状态</th><th class="num">可用资金</th><th class="num">持仓市值</th>
-            <th class="num">总资产</th><th class="num">持仓数</th><th>风险等级</th><th>操作</th>
-          </tr></thead>
-          <tbody id="accBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
-        </table></div>
-        <p class="hint">
-          说明：账户就是真实账户，没有「演示账户」这一独立概念。
-          零售、机构、管理员共用一张账户表，靠角色字段区分；机构账户可另设授信额度。
-        </p>
+      <div class="panel">
+        <h3>风险偏好分布</h3>
+        <div class="dist" id="ovRisk"></div>
       </div>
     </section>
 
-    <!-- 标的 -->
+    <!-- 零售 / 机构（同一张交易账户表，按 role 过滤） -->
+    <section class="page" id="page-retail">
+      <div class="panel">
+        <div class="row-between">
+          <h3>零售账户 <span class="n" id="retailCount"></span></h3>
+          <div class="row">
+            <input class="search" id="retailSearch" placeholder="搜索用户名 / 昵称" />
+            <button class="btn btn-primary" data-newacc="retail">新建零售账户</button>
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>账户</th><th>状态</th><th>可用资金</th><th>持仓市值</th><th>总资产</th>
+            <th>持仓数</th><th>风险偏好</th><th>操作</th>
+          </tr></thead>
+          <tbody id="retailBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="page" id="page-institution">
+      <div class="panel">
+        <div class="row-between">
+          <h3>机构账户 <span class="n" id="instCount"></span></h3>
+          <div class="row">
+            <input class="search" id="instSearch" placeholder="搜索用户名 / 昵称" />
+            <button class="btn btn-primary" data-newacc="institution">新建机构账户</button>
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>账户</th><th>状态</th><th>可用资金</th><th>授信额度</th><th>总资产</th>
+            <th>持仓数</th><th>风险偏好</th><th>操作</th>
+          </tr></thead>
+          <tbody id="instBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 管理员（独立表） -->
+    <section class="page" id="page-admins">
+      <div class="panel">
+        <div class="row-between">
+          <h3>管理员账户 <span class="n" id="adminCount"></span></h3>
+          <button class="btn btn-primary" id="newAdminBtn">新增管理员</button>
+        </div>
+        <p class="muted" style="font-size:11px; margin:0 0 10px;">
+          管理员是独立的一张表：不参与交易、没有资金与持仓，只能进入本后台。
+          不能删除自己，也不能删到一个不剩。
+        </p>
+        <table>
+          <thead><tr><th>账号</th><th>昵称</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead>
+          <tbody id="adminBody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>修改我的口令</h3>
+        <form id="pwdForm" class="row" style="align-items:flex-end; gap:10px;">
+          <div class="field" style="margin:0; min-width:160px;">
+            <label>原口令</label><input id="pwdOld" type="password" required />
+          </div>
+          <div class="field" style="margin:0; min-width:160px;">
+            <label>新口令（≥8 位）</label><input id="pwdNew" type="password" minlength="8" required />
+          </div>
+          <button class="btn btn-primary" type="submit">更新口令</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- 标的与指数 -->
     <section class="page" id="page-stocks">
-      <div class="card">
-        <div class="card-h">
-          <h2>标的管理</h2><span class="sub" id="stockCount"></span>
-          <div class="right">
+      <div class="panel">
+        <div class="row-between">
+          <h3>标的 <span class="n" id="stockCount"></span></h3>
+          <div class="row">
             <button class="btn btn-ghost" id="refreshStocks">刷新</button>
             <button class="btn btn-primary" id="newStockBtn">新增标的</button>
           </div>
         </div>
-        <div class="scroll"><table>
+        <table>
           <thead><tr>
-            <th>代码</th><th>名称</th><th>板块</th><th>行业</th>
-            <th class="num">昨收</th><th class="num">涨停</th><th class="num">跌停</th>
-            <th class="num">波动率</th><th class="num">β</th><th>操作</th>
+            <th>代码</th><th>名称</th><th>板块</th><th>行业</th><th>现价</th>
+            <th>涨跌幅</th><th>涨停</th><th>跌停</th><th>波动率</th><th>β</th><th>操作</th>
           </tr></thead>
-          <tbody id="stockBody"><tr><td colspan="10" class="empty">加载中…</td></tr></tbody>
-        </table></div>
+          <tbody id="stockBody"><tr><td colspan="11" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <div class="row-between">
+          <h3>指数 <span class="n">由成分股等权合成，不可手工新建</span></h3>
+          <button class="btn btn-ghost" id="refreshIdx">刷新</button>
+        </div>
+        <table>
+          <thead><tr>
+            <th>代码</th><th>名称</th><th>点位</th><th>涨跌幅</th><th>成分</th>
+            <th>上涨</th><th>平盘</th><th>下跌</th><th>成交额</th>
+          </tr></thead>
+          <tbody id="idxBody"><tr><td colspan="9" class="empty">加载中…</td></tr></tbody>
+        </table>
       </div>
     </section>
 
-    <!-- 风险画像 -->
+    <!-- 风险偏好（只读分布，无历史档案） -->
     <section class="page" id="page-risk">
-      <div class="card">
-        <div class="card-h"><h2>风险等级分布</h2><span class="sub">仅统计零售账户</span>
-          <div class="right"><button class="btn btn-ghost" id="refreshRisk">刷新</button></div></div>
+      <div class="panel">
+        <div class="row-between">
+          <h3>风险偏好分布 <span class="n">交易账户当前偏好，不保留历史档案</span></h3>
+          <button class="btn btn-ghost" id="refreshRisk">刷新</button>
+        </div>
         <div class="dist" id="riskDist"></div>
-        <p class="hint">
-          每次提交测评都会归档一条记录（版本、总分、等级、原始答案、时间）。
-          风评结果是适当性管理的凭证，因此保留完整历史而不是只存最后一个数字。
+        <p class="muted" style="font-size:11px; margin:12px 0 0;">
+          等级由服务端按问卷答案复算（满分 30，三等分档）。测评历史记录功能已移除，
+          这里只反映每个账户最后一次测评的结果。
         </p>
+      </div>
+    </section>
+
+    <!-- 系统配置 -->
+    <section class="page" id="page-config">
+      <div class="panel">
+        <div class="row-between">
+          <h3>运行期配置 <span class="n">改完保存后立即生效，无需重启</span></h3>
+          <div class="row">
+            <button class="btn btn-ghost" id="resetCfg">恢复默认</button>
+            <button class="btn btn-primary" id="saveCfg">保存修改</button>
+          </div>
+        </div>
+        <p class="muted" style="font-size:11px; margin:0 0 12px;">
+          只有白名单内的参数可改（费率、初始资金、行情节奏等）。数据库地址、JWT 密钥这类
+          部署级配置不在其中，避免误改导致服务不可用。
+        </p>
+        <div class="cfg-grid" id="cfgGrid"><div class="empty">加载中…</div></div>
       </div>
     </section>
 
     <!-- 数据初始化 -->
     <section class="page" id="page-data">
-      <div class="card">
-        <div class="card-h"><h2>数据初始化</h2><span class="sub">显式注入，不再随启动自动执行</span></div>
+      <div class="panel">
+        <div class="row-between"><h3>当前数据</h3><button class="btn btn-ghost" id="refreshSeed">刷新</button></div>
         <div class="dist" id="seedStatus"></div>
-        <div class="row" style="margin-top:14px">
-          <div class="grow">
-            <label>注入范围</label>
-            <div style="display:flex;gap:14px;font-size:13px;color:var(--text-2);padding-top:6px">
-              <label style="display:flex;gap:6px;align-items:center;margin:0">
-                <input type="checkbox" id="seedStocks" checked /> 28 支默认标的
-              </label>
-              <label style="display:flex;gap:6px;align-items:center;margin:0">
-                <input type="checkbox" id="seedUsers" checked /> 种子账户
-              </label>
-              <label style="display:flex;gap:6px;align-items:center;margin:0">
-                <input type="checkbox" id="seedHistory" checked /> 历史日线
-              </label>
-            </div>
-          </div>
-          <button class="btn btn-primary" id="seedBtn">注入数据</button>
-        </div>
-        <p class="hint">
-          启动时不再自动写入任何业务数据，避免「运营删掉的账户重启又复活」「空库无法从零搭建」。
-          注入是幂等的：已存在的标的与账户不会重复创建，也不会覆盖你改过的参数。
+      </div>
+      <div class="panel">
+        <h3>手动注入标准数据集</h3>
+        <p class="muted" style="font-size:11px; margin:0 0 10px;">
+          启动时不再自动写入任何业务数据。下面三项都幂等：重复点击不会产生重复记录；
+          运营改过的标的参数、已删除的标的不会被覆盖或复活。
         </p>
+        <div class="row" style="gap:16px; margin-bottom:12px;">
+          <label class="row" style="gap:6px;"><input type="checkbox" id="seedStocks" checked /> 默认标的</label>
+          <label class="row" style="gap:6px;"><input type="checkbox" id="seedUsers" checked /> 种子账户（零售 / 机构）</label>
+          <label class="row" style="gap:6px;"><input type="checkbox" id="seedHistory" checked /> 历史日线</label>
+        </div>
+        <button class="btn btn-primary" id="seedBtn">执行注入</button>
       </div>
     </section>
 
-    <!-- 撮合与审计 -->
+    <!-- 撮合与事件 -->
     <section class="page" id="page-ops">
-      <div class="card">
-        <div class="card-h"><h2>撮合与结算</h2>
-          <div class="right">
+      <div class="panel">
+        <div class="row-between">
+          <h3>撮合质量</h3>
+          <div class="row">
             <button class="btn btn-ghost" id="refreshOps">刷新</button>
-            <button class="btn btn-primary" id="settleBtn">执行收盘结算</button>
-          </div></div>
-        <div class="scroll"><table>
-          <div class="dist" id="matchKpi"></div>
-          <div class="scroll" style="margin-top:12px"><table>
-            <thead><tr><th>代码</th><th>名称</th><th class="num">成交笔数</th>
-              <th class="num">成交额</th><th class="num">成交量</th></tr></thead>
-            <tbody id="matchBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
-          </table></div>
-        </table></div>
+            <button class="btn btn-ghost" id="settleBtn">日终结转</button>
+          </div>
+        </div>
+        <div class="dist" id="matchKpi"></div>
       </div>
-      <div class="card">
-        <div class="card-h"><h2>审计日志</h2></div>
-        <div class="scroll"><table>
-          <thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>详情</th><th>IP</th></tr></thead>
-          <tbody id="auditBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
-        </table></div>
+      <div class="panel">
+        <h3>成交额 Top 标的</h3>
+        <table>
+          <thead><tr><th>代码</th><th>名称</th><th>成交笔数</th><th>成交额</th><th>成交量</th></tr></thead>
+          <tbody id="matchBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>系统事件 <span class="n">替代原审计日志：只记发生了什么，不记谁对谁做了什么</span></h3>
+        <table>
+          <thead><tr><th>时间</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody id="eventBody"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
+        </table>
       </div>
     </section>
   </main>
 </div>
 
-<!-- 新建账户 -->
+<!-- 新建交易账户 -->
 <div class="modal-mask" id="accModal">
   <form class="modal" id="accForm">
-    <h3>新建账户</h3>
-    <div class="field"><label>用户名</label><input id="nUsername" required minlength="2" /></div>
-    <div class="field"><label>显示名称</label><input id="nDisplay" placeholder="可留空" /></div>
-    <div class="field"><label>初始密码（至少 6 位）</label><input id="nPassword" type="password" required minlength="6" /></div>
-    <div class="field"><label>角色</label>
-      <select id="nRole">
-        <option value="retail">零售</option>
-        <option value="institution">机构</option>
-        <option value="admin">管理员</option>
-      </select></div>
-    <div class="field"><label>初始资金（元）</label><input id="nCash" type="number" value="1000000" min="0" /></div>
-    <div class="field"><label>授信额度（仅机构）</label><input id="nCredit" type="number" value="0" min="0" /></div>
-    <div class="row" style="justify-content:flex-end">
+    <h3 id="accModalTitle">新建账户</h3>
+    <input type="hidden" id="nRole" value="retail" />
+    <div class="field"><label>用户名（登录名）</label><input id="nUsername" required maxlength="40" /></div>
+    <div class="field"><label>昵称</label><input id="nDisplay" maxlength="40" /></div>
+    <div class="field"><label>初始口令（≥6 位）</label><input id="nPassword" type="text" required minlength="6" /></div>
+    <div class="field"><label>初始资金</label><input id="nCash" type="number" step="1000" value="1000000" /></div>
+    <div class="field" id="creditField"><label>授信额度（机构）</label><input id="nCredit" type="number" step="100000" value="0" /></div>
+    <div class="row" style="justify-content:flex-end;">
       <button class="btn btn-ghost" type="button" id="accCancel">取消</button>
+      <button class="btn btn-primary" type="submit">创建</button>
+    </div>
+  </form>
+</div>
+
+<!-- 新建管理员 -->
+<div class="modal-mask" id="adminModal">
+  <form class="modal" id="adminForm">
+    <h3>新增管理员</h3>
+    <div class="field"><label>账号</label><input id="aUsername" required maxlength="40" /></div>
+    <div class="field"><label>昵称</label><input id="aDisplay" maxlength="40" /></div>
+    <div class="field"><label>口令（≥8 位）</label><input id="aPassword" type="text" required minlength="8" /></div>
+    <div class="row" style="justify-content:flex-end;">
+      <button class="btn btn-ghost" type="button" id="adminCancel">取消</button>
       <button class="btn btn-primary" type="submit">创建</button>
     </div>
   </form>
@@ -321,13 +430,12 @@
     <div class="field"><label>代码（6 位）</label><input id="sCode" required maxlength="12" /></div>
     <div class="field"><label>名称</label><input id="sName" required maxlength="24" /></div>
     <div class="field"><label>板块</label>
-      <select id="sBoard">
-        <option>主板</option><option>创业板</option><option>科创板</option><option>北交所</option>
-      </select></div>
+      <select id="sBoard"><option>主板</option><option>创业板</option><option>科创板</option><option>北交所</option></select>
+    </div>
     <div class="field"><label>行业</label><input id="sIndustry" maxlength="24" /></div>
     <div class="field"><label>基准价</label><input id="sPrice" type="number" step="0.01" value="10" min="0.01" /></div>
     <div class="field"><label>波动率</label><input id="sVol" type="number" step="0.01" value="0.35" /></div>
-    <div class="row" style="justify-content:flex-end">
+    <div class="row" style="justify-content:flex-end;">
       <button class="btn btn-ghost" type="button" id="stockCancel">取消</button>
       <button class="btn btn-primary" type="submit">创建</button>
     </div>
@@ -335,15 +443,15 @@
 </div>
 
 <script>
-/* ------------------------------------------------------------------ */
-/* 基础工具：令牌放在 localStorage，所有请求带 Bearer，避免浏览器持有 HMAC 密钥 */
-/* ------------------------------------------------------------------ */
+/* ================================================================== *
+ * 基础工具
+ * ================================================================== */
 const TOKEN_KEY = 'stland.admin.token';
 const USER_KEY = 'stland.admin.user';
 const $ = (id) => document.getElementById(id);
-let state = { tab: 'overview', role: 'retail', stocks: [], accounts: [] };
+const state = { tab: 'overview', accounts: {}, cfg: [], cfgDirty: {} };
 
-function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
+const token = () => localStorage.getItem(TOKEN_KEY) || '';
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -357,9 +465,9 @@ async function api(path, opts = {}) {
   let body = null;
   try { body = await res.json(); } catch { body = null; }
   if (!res.ok) {
-    if (res.status === 401) { logout(); }
-    const detail = body && body.detail;
-    const msg = typeof detail === 'string' ? detail : (detail && detail.message) || '请求失败 ' + res.status;
+    if (res.status === 401 && path !== '/api/admin/login') logout();
+    const d = body && body.detail;
+    const msg = typeof d === 'string' ? d : (d && d.message) || ('请求失败 ' + res.status);
     throw new Error(msg);
   }
   return body;
@@ -373,56 +481,60 @@ function banner(text, type = 'ok') {
   banner._t = setTimeout(() => { el.className = 'banner'; }, 4000);
 }
 
-const money = (v) => (v == null ? '--' : Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 2 }));
-const pctText = (v) => (v == null ? '--' : (Number(v) * 100).toFixed(1) + '%');
+const num = (v, d = 2) => (v == null || isNaN(v) ? '--' : Number(v).toLocaleString('zh-CN', {
+  minimumFractionDigits: d, maximumFractionDigits: d,
+}));
+const int = (v) => (v == null ? '--' : Number(v).toLocaleString('zh-CN'));
+const pct = (v) => (v == null ? '--' : (Number(v) > 0 ? '+' : '') + Number(v).toFixed(2) + '%');
 const dt = (ts) => {
   if (!ts) return '--';
-  const ms = ts < 1e11 ? ts * 1000 : ts;   // 服务端时间戳是秒
-  const d = new Date(ms);
+  const d = new Date(ts < 1e11 ? ts * 1000 : ts);
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 };
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
 
 const RISK_LABEL = { 0: '未测评', 1: '保守型', 2: '稳健型', 3: '进取型' };
-const STATUS_LABEL = { active: '正常', frozen: '冻结', disabled: '停用' };
-const ROLE_LABEL = { retail: '零售', institution: '机构', admin: '管理员' };
+const STATUS_LABEL = { active: '正常', frozen: '冻结', closed: '注销' };
+const STATUS_CLASS = { active: 'ok', frozen: 'warn', closed: 'bad' };
+const ROLE_LABEL = { retail: '零售', institution: '机构' };
 
-/* ---------------------------- 登录 ---------------------------- */
+/* ================================================================== *
+ * 登录 / 登出
+ * ================================================================== */
 $('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  $('loginErr').className = 'banner err';
   const btn = $('loginBtn');
+  const err = $('loginErr');
+  err.style.opacity = 0;
   btn.disabled = true;
   try {
-    const res = await api('/api/auth/login', {
+    // 管理员走独立接口与独立表，不再复用 /api/auth/login
+    const res = await api('/api/admin/login', {
       method: 'POST',
       body: JSON.stringify({ username: $('username').value.trim(), password: $('password').value }),
     });
-    // 服务端登录返回 { user, token: {access_token, token_type, expires_in}, refresh_token }
-    // token 是对象而非字符串，真正的 JWT 在其 access_token 字段
     const t = res && res.token;
-    const accessToken = typeof t === 'string' ? t : (t && t.access_token) || (res && res.access_token);
+    const accessToken = typeof t === 'string' ? t : (t && t.access_token);
     if (!accessToken) throw new Error('登录响应异常：未拿到访问令牌');
-    if (res.user && res.user.role !== 'admin') {
-      throw new Error('该账户不是管理员，无权进入后台');
-    }
     localStorage.setItem(TOKEN_KEY, accessToken);
-    localStorage.setItem(USER_KEY, JSON.stringify(res.user || {}));
-    enterApp(res.user);
-  } catch (err) {
-    const el = $('loginErr');
-    el.textContent = err.message;
-    el.className = 'banner err show';
+    localStorage.setItem(USER_KEY, JSON.stringify(res.admin || {}));
+    enterApp(res.admin);
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.style.opacity = 1;
   } finally {
     btn.disabled = false;
   }
 });
 
-function enterApp(user) {
+function enterApp(admin) {
   $('login').style.display = 'none';
   $('app').style.display = 'block';
-  const u = user || JSON.parse(localStorage.getItem(USER_KEY) || '{}');
-  $('who').textContent = u.display_name || u.username || '';
+  const a = admin || JSON.parse(localStorage.getItem(USER_KEY) || '{}');
+  $('who').textContent = (a.display_name || a.username || '') + (a.username ? ' · 管理员' : '');
   loadOverview();
 }
 
@@ -434,7 +546,9 @@ function logout() {
 }
 $('logoutBtn').addEventListener('click', logout);
 
-/* ---------------------------- 标签切换 ---------------------------- */
+/* ================================================================== *
+ * 页签切换
+ * ================================================================== */
 $('tabs').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-tab]');
   if (!b) return;
@@ -443,13 +557,21 @@ $('tabs').addEventListener('click', (e) => {
   document.querySelectorAll('section.page').forEach((s) =>
     s.classList.toggle('on', s.id === 'page-' + state.tab));
   ({
-    overview: loadOverview, accounts: () => loadAccounts(state.role),
-    stocks: loadStocks, risk: loadRisk, data: loadSeedStatus,
+    overview: loadOverview,
+    retail: () => loadAccounts('retail'),
+    institution: () => loadAccounts('institution'),
+    admins: loadAdmins,
+    stocks: () => { loadStocks(); loadIndices(); },
+    risk: loadRisk,
+    config: loadConfig,
+    data: loadSeedStatus,
     ops: loadOps,
   })[state.tab]?.();
 });
 
-/* ---------------------------- 总览 ---------------------------- */
+/* ================================================================== *
+ * 总览
+ * ================================================================== */
 async function loadOverview() {
   try {
     const d = await api('/api/admin/dashboard');
@@ -458,96 +580,140 @@ async function loadOverview() {
       ? `${d.session.label} · ${d.session.trade_date} · ${d.session.can_trade ? '可交易' : '不可交易'}`
       : '';
     const items = [
-      ['账户总数', k.user_count], ['正常账户', k.active_users], ['冻结账户', k.frozen_users],
-      ['总资产（元）', money(k.total_asset)], ['今日委托', k.today_orders],
-      ['今日成交', k.today_trades], ['今日成交额', money(k.today_turnover)],
-      ['挂单中', k.open_orders], ['持仓记录', k.position_rows],
+      ['交易账户', k.user_count], ['零售', k.retail_count], ['机构', k.institution_count],
+      ['管理员', k.admin_count], ['正常', k.active_users], ['冻结', k.frozen_users],
+      ['总资产', num(k.total_asset)], ['今日委托', k.today_orders], ['今日成交', k.today_trades],
+      ['今日成交额', num(k.today_turnover)], ['挂单中', k.open_orders], ['自选条数', k.watch_items],
     ];
-    $('kpis').innerHTML = items.map(([k1, v]) =>
-      `<div class="kpi"><div class="k">${k1}</div><div class="v">${v ?? '--'}</div></div>`).join('');
-    const rd = d.role_distribution || {};
-    $('roleDist').innerHTML = ['retail', 'institution', 'admin'].map((r) =>
-      `<div class="dist-item"><div class="k">${ROLE_LABEL[r]}账户</div>
-       <div class="v">${rd[r] ?? 0}</div></div>`).join('');
+    $('kpis').innerHTML = items.map(([a, v]) =>
+      `<div class="kpi"><div class="k">${a}</div><div class="v">${v ?? '--'}</div></div>`).join('');
+
+    $('roleDist').innerHTML = [
+      ['零售账户', k.retail_count], ['机构账户', k.institution_count], ['管理员', k.admin_count],
+    ].map(([a, v]) => `<div class="dist-item"><div class="k">${a}</div><div class="v">${v ?? 0}</div></div>`).join('');
+
+    renderRiskDist('ovRisk', d.risk_distribution || {});
   } catch (e) { banner(e.message, 'err'); }
 }
 $('refreshOv').addEventListener('click', loadOverview);
 
-/* ---------------------------- 账户 ---------------------------- */
-$('roleChips').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-role]');
-  if (!b) return;
-  state.role = b.dataset.role;
-  [...$('roleChips').children].forEach((x) => x.classList.toggle('on', x === b));
-  loadAccounts(state.role);
-});
+function renderRiskDist(target, d) {
+  const items = [
+    ['账户总数', d.total], ['未测评', d.unassessed], ['保守型', d.conservative],
+    ['稳健型', d.balanced], ['进取型', d.aggressive],
+  ];
+  $(target).innerHTML = items.map(([a, v]) =>
+    `<div class="dist-item"><div class="k">${a}</div><div class="v">${v ?? 0}</div></div>`).join('');
+}
 
+/* ================================================================== *
+ * 交易账户（零售 / 机构共用一张表，按 role 过滤）
+ * ================================================================== */
 async function loadAccounts(role) {
-  const body = $('accBody');
+  const isInst = role === 'institution';
+  const body = $(isInst ? 'instBody' : 'retailBody');
+  const searchEl = $(isInst ? 'instSearch' : 'retailSearch');
+  const countEl = $(isInst ? 'instCount' : 'retailCount');
   body.innerHTML = '<tr><td colspan="8" class="empty">加载中…</td></tr>';
   try {
-    const kw = $('accSearch').value.trim();
-    const d = await api(`/api/admin/accounts?role=${encodeURIComponent(role)}&keyword=${encodeURIComponent(kw)}`);
-    state.accounts = d.items || [];
-    $('accCount').textContent = `共 ${d.total ?? state.accounts.length} 个${ROLE_LABEL[role]}账户`;
-    if (!state.accounts.length) {
+    const kw = searchEl.value.trim();
+    const d = await api(`/api/admin/accounts?role=${role}&keyword=${encodeURIComponent(kw)}`);
+    state.accounts[role] = d.items || [];
+    countEl.textContent = `共 ${d.total ?? 0} 个`;
+    if (!d.items.length) {
       body.innerHTML = '<tr><td colspan="8" class="empty">该分类下暂无账户</td></tr>';
       return;
     }
-    body.innerHTML = state.accounts.map((a) => `
+    body.innerHTML = d.items.map((a) => `
       <tr>
-        <td><strong>${a.display_name || a.username}</strong>
-            <span style="color:var(--text-3);font-size:11px"> · ${a.username}</span></td>
-        <td><span class="pill ${a.status === 'active' ? 'ok' : 'warn'}">${STATUS_LABEL[a.status] || a.status}</span></td>
-        <td class="num">${money(a.cash)}</td>
-        <td class="num">${money(a.market_value)}</td>
-        <td class="num">${money(a.total_asset)}</td>
+        <td><strong>${esc(a.display_name || a.username)}</strong>
+          <span class="muted" style="font-size:10px"> · ${esc(a.username)}</span></td>
+        <td><span class="pill ${STATUS_CLASS[a.status] || ''}">${STATUS_LABEL[a.status] || a.status}</span></td>
+        <td class="num">${num(a.cash)}</td>
+        <td class="num">${isInst ? num(a.credit_limit) : num(a.market_value)}</td>
+        <td class="num">${num(a.total_asset)}</td>
         <td class="num">${a.positions ?? 0}</td>
-        <td><span class="pill ${a.risk_level ? 'info' : ''}">${RISK_LABEL[a.risk_level] || '未测评'}</span></td>
+        <td><span class="pill ${a.risk_assessed ? 'info' : ''}">${a.risk_assessed ? RISK_LABEL[a.risk_level] : '未测评'}</span></td>
         <td>
-          <button class="btn btn-ghost" data-risk="${a.id}" data-name="${a.username}">风险记录</button>
-          <button class="btn btn-danger" data-del="${a.id}" data-name="${a.username}">删除</button>
+          <button class="btn btn-ghost" data-adjust="${a.id}" data-name="${esc(a.username)}">调资金</button>
+          <button class="btn btn-ghost" data-frozen="${a.id}" data-name="${esc(a.username)}"
+            data-status="${a.status}">${a.status === 'frozen' ? '解冻' : '冻结'}</button>
+          <button class="btn btn-danger" data-delacc="${a.id}" data-name="${esc(a.username)}">删除</button>
         </td>
       </tr>`).join('');
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="8" class="empty">${e.message}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
 
-$('accSearch').addEventListener('input', () => {
-  clearTimeout($('accSearch')._t);
-  $('accSearch')._t = setTimeout(() => loadAccounts(state.role), 350);
+$('retailSearch').addEventListener('input', () => {
+  clearTimeout($('retailSearch')._t);
+  $('retailSearch')._t = setTimeout(() => loadAccounts('retail'), 350);
+});
+$('instSearch').addEventListener('input', () => {
+  clearTimeout($('instSearch')._t);
+  $('instSearch')._t = setTimeout(() => loadAccounts('institution'), 350);
 });
 
-$('accBody').addEventListener('click', async (e) => {
-  const riskBtn = e.target.closest('button[data-risk]');
-  if (riskBtn) {
-    const id = riskBtn.dataset.risk;
-    try {
-      const d = await api(`/api/admin/risk/${id}`);
-      const lines = (d.history || []).map((h) =>
-        `${dt(h.assessed_at)} · v${h.version} · ${h.score} 分 · ${RISK_LABEL[h.level]} · 答案[${(h.answers || []).join(',')}]`);
-      alert(`账户 ${d.username} 风险等级：${RISK_LABEL[d.risk_level] || '未测评'}\n\n` +
-        (lines.length ? lines.join('\n') : '暂无测评记录'));
-    } catch (err) { banner(err.message, 'err'); }
-    return;
-  }
-  const delBtn = e.target.closest('button[data-del]');
-  if (delBtn) {
-    const id = delBtn.dataset.del;
-    if (!confirm(`确认删除账户 ${delBtn.dataset.name}？该操作会一并清除其持仓、委托与流水，且不可撤销。`)) return;
-    try {
-      await api(`/api/admin/accounts/${id}`, { method: 'DELETE' });
-      banner('账户已删除');
-      loadAccounts(state.role);
-    } catch (err) { banner(err.message, 'err'); }
-  }
+document.querySelectorAll('button[data-newacc]').forEach((b) => {
+  b.addEventListener('click', () => {
+    const role = b.dataset.newacc;
+    $('nRole').value = role;
+    $('accModalTitle').textContent = role === 'institution' ? '新建机构账户' : '新建零售账户';
+    $('creditField').style.display = role === 'institution' ? '' : 'none';
+    $('accModal').classList.add('show');
+  });
 });
 
-$('newAccBtn').addEventListener('click', () => $('accModal').classList.add('show'));
+['retailBody', 'instBody'].forEach((id) => {
+  $(id).addEventListener('click', async (e) => {
+    const role = id === 'instBody' ? 'institution' : 'retail';
+
+    const adj = e.target.closest('button[data-adjust]');
+    if (adj) {
+      const raw = prompt(`给 ${adj.dataset.name} 调整可用资金\n正数入金，负数出金（例如 10000 或 -5000）`, '10000');
+      if (raw === null) return;
+      const amount = Number(raw);
+      if (!amount || isNaN(amount)) { banner('请输入有效的调整金额', 'err'); return; }
+      try {
+        await api(`/api/admin/accounts/${adj.dataset.adjust}/adjust`, {
+          method: 'POST', body: JSON.stringify({ amount, remark: '管理端调整' }),
+        });
+        banner('资金已调整');
+        loadAccounts(role);
+      } catch (err) { banner(err.message, 'err'); }
+      return;
+    }
+
+    const frz = e.target.closest('button[data-frozen]');
+    if (frz) {
+      const next = frz.dataset.status === 'frozen' ? 'active' : 'frozen';
+      try {
+        await api(`/api/admin/accounts/${frz.dataset.frozen}/status`, {
+          method: 'POST', body: JSON.stringify({ status: next }),
+        });
+        banner(next === 'frozen' ? '账户已冻结' : '账户已解冻');
+        loadAccounts(role);
+      } catch (err) { banner(err.message, 'err'); }
+      return;
+    }
+
+    const del = e.target.closest('button[data-delacc]');
+    if (del) {
+      if (!confirm(`确认删除账户 ${del.dataset.name}？\n会一并清除其持仓、委托、流水与自选，且不可撤销。`)) return;
+      try {
+        await api(`/api/admin/accounts/${del.dataset.del}`, { method: 'DELETE' });
+        banner('账户已删除');
+        loadAccounts(role);
+      } catch (err) { banner(err.message, 'err'); }
+    }
+  });
+});
+
 $('accCancel').addEventListener('click', () => $('accModal').classList.remove('show'));
 $('accForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const role = $('nRole').value;
   try {
     await api('/api/admin/accounts', {
       method: 'POST',
@@ -555,55 +721,172 @@ $('accForm').addEventListener('submit', async (e) => {
         username: $('nUsername').value.trim(),
         display_name: $('nDisplay').value.trim(),
         password: $('nPassword').value,
-        role: $('nRole').value,
+        role,
         cash: Number($('nCash').value || 0),
-        credit_limit: Number($('nCredit').value || 0),
+        credit_limit: role === 'institution' ? Number($('nCredit').value || 0) : 0,
       }),
     });
     $('accModal').classList.remove('show');
     $('accForm').reset();
     banner('账户已创建');
-    state.role = $('nRole').value;
-    [...$('roleChips').children].forEach((x) => x.classList.toggle('on', x.dataset.role === state.role));
-    loadAccounts(state.role);
+    loadAccounts(role);
   } catch (err) { banner(err.message, 'err'); }
 });
 
-/* ---------------------------- 标的 ---------------------------- */
-async function loadStocks() {
-  const body = $('stockBody');
-  body.innerHTML = '<tr><td colspan="10" class="empty">加载中…</td></tr>';
+/* ================================================================== *
+ * 管理员（独立表）
+ * ================================================================== */
+async function loadAdmins() {
+  const body = $('adminBody');
+  body.innerHTML = '<tr><td colspan="6" class="empty">加载中…</td></tr>';
   try {
-    const d = await api('/api/admin/stocks');
-    const rows = d.items || d.stocks || [];
-    state.stocks = rows;
-    $('stockCount').textContent = `共 ${rows.length} 支`;
-    if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="10" class="empty">库里还没有标的，去「数据初始化」注入默认标的</td></tr>';
+    const d = await api('/api/admin/admins');
+    $('adminCount').textContent = `共 ${d.total ?? 0} 个`;
+    if (!d.items.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">暂无管理员</td></tr>';
       return;
     }
-    body.innerHTML = rows.map((s) => `
+    body.innerHTML = d.items.map((a) => `
       <tr>
-        <td>${s.code}</td><td>${s.name}</td><td>${s.board || '--'}</td><td>${s.industry || '--'}</td>
-        <td class="num">${Number(s.prev_close ?? s.init_price ?? 0).toFixed(2)}</td>
-        <td class="num">${Number(s.limit_up ?? 0).toFixed(2)}</td>
-        <td class="num">${Number(s.limit_down ?? 0).toFixed(2)}</td>
-        <td class="num">${Number(s.vol ?? 0).toFixed(2)}</td>
-        <td class="num">${Number(s.beta ?? 0).toFixed(2)}</td>
-        <td><button class="btn btn-danger" data-dels="${s.code}" data-name="${s.name}">下线</button></td>
+        <td><strong>${esc(a.username)}</strong></td>
+        <td>${esc(a.display_name || '--')}</td>
+        <td><span class="pill ${a.is_active ? 'ok' : 'bad'}">${a.is_active ? '启用' : '停用'}</span></td>
+        <td class="muted">${dt(a.last_login_at)}</td>
+        <td class="muted">${dt(a.created_at)}</td>
+        <td>
+          <button class="btn btn-ghost" data-admstat="${a.id}" data-active="${a.is_active}">
+            ${a.is_active ? '停用' : '启用'}</button>
+          <button class="btn btn-danger" data-deladm="${a.id}" data-name="${esc(a.username)}">删除</button>
+        </td>
       </tr>`).join('');
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="10" class="empty">${e.message}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
+
+$('adminBody').addEventListener('click', async (e) => {
+  const st = e.target.closest('button[data-admstat]');
+  if (st) {
+    const next = st.dataset.active !== 'true';
+    try {
+      await api(`/api/admin/admins/${st.dataset.admstat}/status`, {
+        method: 'POST', body: JSON.stringify({ is_active: next }),
+      });
+      banner(next ? '管理员已启用' : '管理员已停用');
+      loadAdmins();
+    } catch (err) { banner(err.message, 'err'); }
+    return;
+  }
+  const del = e.target.closest('button[data-deladm]');
+  if (del) {
+    if (!confirm(`确认删除管理员 ${del.dataset.name}？`)) return;
+    try {
+      await api(`/api/admin/admins/${del.dataset.del}`, { method: 'DELETE' });
+      banner('管理员已删除');
+      loadAdmins();
+    } catch (err) { banner(err.message, 'err'); }
+  }
+});
+
+$('newAdminBtn').addEventListener('click', () => $('adminModal').classList.add('show'));
+$('adminCancel').addEventListener('click', () => $('adminModal').classList.remove('show'));
+$('adminForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/admin/admins', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: $('aUsername').value.trim(),
+        display_name: $('aDisplay').value.trim(),
+        password: $('aPassword').value,
+      }),
+    });
+    $('adminModal').classList.remove('show');
+    $('adminForm').reset();
+    banner('管理员已创建');
+    loadAdmins();
+  } catch (err) { banner(err.message, 'err'); }
+});
+
+$('pwdForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/admin/password', {
+      method: 'POST',
+      body: JSON.stringify({ old_password: $('pwdOld').value, new_password: $('pwdNew').value }),
+    });
+    $('pwdForm').reset();
+    banner('口令已更新');
+  } catch (err) { banner(err.message, 'err'); }
+});
+
+/* ================================================================== *
+ * 标的 / 指数
+ * ================================================================== */
+async function loadStocks() {
+  const body = $('stockBody');
+  body.innerHTML = '<tr><td colspan="11" class="empty">加载中…</td></tr>';
+  try {
+    const d = await api('/api/admin/stocks');
+    const rows = d.items || [];
+    $('stockCount').textContent = `共 ${rows.length} 支`;
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="11" class="empty">库中暂无标的，去「数据初始化」注入默认标的</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map((s) => {
+      const chg = s.change_pct;
+      const cls = chg > 0 ? 'ok' : chg < 0 ? 'bad' : '';
+      return `<tr>
+        <td>${esc(s.code)}</td><td>${esc(s.name)}</td>
+        <td>${esc(s.board || '--')}</td><td>${esc(s.industry || '--')}</td>
+        <td class="num">${s.price != null ? num(s.price) : num(s.prev_close)}</td>
+        <td class="num"><span class="pill ${cls}">${chg != null ? pct(chg) : '--'}</span></td>
+        <td class="num">${num(s.limit_up)}</td><td class="num">${num(s.limit_down)}</td>
+        <td class="num">${num(s.vol)}</td><td class="num">${num(s.beta)}</td>
+        <td><button class="btn btn-danger" data-dels="${esc(s.code)}" data-name="${esc(s.name)}">下线</button></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="11" class="empty">${esc(e.message)}</td></tr>`;
+  }
+}
+
+async function loadIndices() {
+  const body = $('idxBody');
+  body.innerHTML = '<tr><td colspan="9" class="empty">加载中…</td></tr>';
+  try {
+    const d = await api('/api/admin/indices');
+    const rows = d.items || [];
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="9" class="empty">暂无指数</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map((i) => {
+      const cls = i.change_pct > 0 ? 'ok' : i.change_pct < 0 ? 'bad' : '';
+      return `<tr>
+        <td>${esc(i.code)}</td><td>${esc(i.name)}</td>
+        <td class="num">${num(i.price)}</td>
+        <td class="num"><span class="pill ${cls}">${pct(i.change_pct)}</span></td>
+        <td class="num">${i.members ?? 0}</td>
+        <td class="num">${i.up ?? 0}</td><td class="num">${i.flat ?? 0}</td><td class="num">${i.down ?? 0}</td>
+        <td class="num">${num(i.amount)}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`;
+  }
+}
+
 $('refreshStocks').addEventListener('click', loadStocks);
+$('refreshIdx').addEventListener('click', loadIndices);
 
 $('stockBody').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-dels]');
   if (!b) return;
-  if (!confirm(`确认下线标的 ${b.dataset.dels} ${b.dataset.name}？`)) return;
+  if (!confirm(`确认下线标的 ${b.dataset.dels} ${b.dataset.name}？\n有持仓时会被拒绝，请先处理持仓。`)) return;
   try {
-    await api(`/api/admin/stocks/${b.dataset.dels}`, { method: 'DELETE' });
+    await api(`/api/admin/stocks/${encodeURIComponent(b.dataset.dels)}`, { method: 'DELETE' });
     banner('标的已下线');
     loadStocks();
   } catch (err) { banner(err.message, 'err'); }
@@ -632,32 +915,106 @@ $('stockForm').addEventListener('submit', async (e) => {
   } catch (err) { banner(err.message, 'err'); }
 });
 
-/* ---------------------------- 风险画像 ---------------------------- */
+/* ================================================================== *
+ * 风险偏好（只读分布）
+ * ================================================================== */
 async function loadRisk() {
   try {
     const d = await api('/api/admin/risk-summary');
-    const items = [
-      ['零售账户总数', d.total_retail], ['未测评', d.unassessed],
-      ['保守型', d.conservative], ['稳健型', d.balanced], ['进取型', d.aggressive],
-    ];
-    $('riskDist').innerHTML = items.map(([k, v]) =>
-      `<div class="dist-item"><div class="k">${k}</div><div class="v">${v ?? 0}</div></div>`).join('');
+    renderRiskDist('riskDist', d);
   } catch (e) { banner(e.message, 'err'); }
 }
 $('refreshRisk').addEventListener('click', loadRisk);
 
-/* ---------------------------- 数据初始化 ---------------------------- */
+/* ================================================================== *
+ * 系统配置（运行期可改）
+ * ================================================================== */
+async function loadConfig() {
+  const grid = $('cfgGrid');
+  grid.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const d = await api('/api/admin/settings');
+    state.cfg = d.items || [];
+    state.cfgDirty = {};
+    if (!state.cfg.length) { grid.innerHTML = '<div class="empty">暂无可配置项</div>'; return; }
+    grid.innerHTML = state.cfg.map((c) => {
+      let control = '';
+      if (c.kind === 'bool') {
+        control = `<select data-cfg="${c.key}">
+          <option value="true" ${c.value ? 'selected' : ''}>开启</option>
+          <option value="false" ${!c.value ? 'selected' : ''}>关闭</option></select>`;
+      } else if (c.kind === 'choice') {
+        control = `<select data-cfg="${c.key}">${c.choices.map((o) =>
+          `<option value="${esc(o)}" ${o === c.value ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+      } else {
+        const step = c.kind === 'int' ? '1' : 'any';
+        control = `<input type="number" step="${step}" data-cfg="${c.key}" value="${c.value}" />`;
+      }
+      const range = (c.kind === 'float' || c.kind === 'int')
+        ? `${c.min} ~ ${c.max}${c.unit ? ' ' + c.unit : ''}` : '';
+      return `<div class="cfg" id="cfg-${c.key}">
+        <div class="t"><span class="lbl">${esc(c.label)}</span><span class="key">${esc(c.key)}</span></div>
+        ${control}
+        <div class="note">${esc(c.note || '')}${range ? ' · 范围 ' + esc(range) : ''} · 默认 ${esc(c.default)}</div>
+      </div>`;
+    }).join('');
+    grid.querySelectorAll('[data-cfg]').forEach((el) => {
+      el.addEventListener('input', () => {
+        state.cfgDirty[el.dataset.cfg] = el.value;
+        $('cfg-' + el.dataset.cfg).classList.add('dirty');
+      });
+      el.addEventListener('change', () => {
+        state.cfgDirty[el.dataset.cfg] = el.value;
+        $('cfg-' + el.dataset.cfg).classList.add('dirty');
+      });
+    });
+  } catch (e) {
+    grid.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+$('saveCfg').addEventListener('click', async () => {
+  const vals = state.cfgDirty;
+  if (!Object.keys(vals).length) { banner('没有需要保存的修改', 'err'); return; }
+  try {
+    const d = await api('/api/admin/settings', {
+      method: 'PUT', body: JSON.stringify({ values: vals }),
+    });
+    const okN = (d.updated || []).length;
+    const badN = (d.rejected || []).length;
+    if (badN) {
+      banner(`已保存 ${okN} 项；${badN} 项被拒绝：` + d.rejected.map((r) => r.reason).join('；'), 'err');
+    } else {
+      banner(`已保存 ${okN} 项配置，已立即生效`);
+    }
+    loadConfig();
+  } catch (err) { banner(err.message, 'err'); }
+});
+
+$('resetCfg').addEventListener('click', async () => {
+  if (!confirm('确认把全部运行期配置恢复为代码默认值？')) return;
+  try {
+    await api('/api/admin/settings/reset', { method: 'POST' });
+    banner('已恢复默认配置');
+    loadConfig();
+  } catch (err) { banner(err.message, 'err'); }
+});
+
+/* ================================================================== *
+ * 数据初始化
+ * ================================================================== */
 async function loadSeedStatus() {
   try {
     const d = await api('/api/admin/seed/status');
     const items = [
-      ['当前标的数', d.stocks], ['当前账户数', d.users], ['日线条数', d.daily_bars],
-      ['是否已初始化', d.seeded ? '是' : '否'],
+      ['标的数', d.stocks], ['交易账户', d.users], ['管理员', d.admins],
+      ['日线条数', int(d.daily_bars)], ['是否已初始化', d.seeded ? '是' : '否'],
     ];
-    $('seedStatus').innerHTML = items.map(([k, v]) =>
-      `<div class="dist-item"><div class="k">${k}</div><div class="v">${v ?? 0}</div></div>`).join('');
+    $('seedStatus').innerHTML = items.map(([a, v]) =>
+      `<div class="dist-item"><div class="k">${a}</div><div class="v">${v ?? 0}</div></div>`).join('');
   } catch (e) { banner(e.message, 'err'); }
 }
+$('refreshSeed').addEventListener('click', loadSeedStatus);
 
 $('seedBtn').addEventListener('click', async (e) => {
   const btn = e.target;
@@ -677,50 +1034,61 @@ $('seedBtn').addEventListener('click', async (e) => {
   finally { btn.disabled = false; }
 });
 
-/* ---------------------------- 撮合与审计 ---------------------------- */
+/* ================================================================== *
+ * 撮合与系统事件
+ * ================================================================== */
 async function loadOps() {
   try {
-    // /api/admin/matching 返回撮合质量聚合指标 + 成交额 Top 标的
     const m = await api('/api/admin/matching');
-    const rows = m.top_symbols || [];
     const kpi = [
       ['委托总数', m.order_count], ['成交笔数', m.trade_count],
-      ['撮成率', m.fill_rate_pct + '%'], ['撤单率', m.cancel_rate_pct + '%'],
-      ['平均单笔成交额', money(m.avg_trade_amount)],
+      ['撮成率', (m.fill_rate_pct ?? 0) + '%'], ['撤单率', (m.cancel_rate_pct ?? 0) + '%'],
+      ['平均单笔成交额', num(m.avg_trade_amount)],
     ];
-    $('matchKpi').innerHTML = kpi.map(([k, v]) =>
-      `<div class="dist-item"><div class="k">${k}</div><div class="v">${v ?? 0}</div></div>`).join('');
+    $('matchKpi').innerHTML = kpi.map(([a, v]) =>
+      `<div class="dist-item"><div class="k">${a}</div><div class="v">${v ?? 0}</div></div>`).join('');
+
+    const rows = m.top_symbols || [];
     $('matchBody').innerHTML = rows.length ? rows.map((o) => `
-      <tr><td>${o.code}</td><td>${o.name || ''}</td><td class="num">${o.trades}</td>
-      <td class="num">${money(o.amount)}</td><td class="num">${o.volume}</td></tr>`).join('')
+      <tr><td>${esc(o.code)}</td><td>${esc(o.name || '')}</td>
+      <td class="num">${o.trades}</td><td class="num">${num(o.amount)}</td>
+      <td class="num">${int(o.volume)}</td></tr>`).join('')
       : '<tr><td colspan="5" class="empty">暂无成交</td></tr>';
   } catch (e) {
-    $('matchBody').innerHTML = `<tr><td colspan="8" class="empty">${e.message}</td></tr>`;
+    $('matchBody').innerHTML = `<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`;
   }
+
+  // 系统事件（原审计日志已移除，这里只记「发生了什么」）
   try {
-    const a = await api('/api/admin/audit');
-    const rows = a.items || a.logs || [];
-    $('auditBody').innerHTML = rows.length ? rows.map((l) => `
-      <tr><td>${dt(l.created_at)}</td><td>${l.username || '--'}</td>
-      <td>${l.action}</td><td style="white-space:normal">${l.detail || ''}</td><td>${l.ip || '--'}</td></tr>`).join('')
-      : '<tr><td colspan="5" class="empty">暂无日志</td></tr>';
+    const ev = await api('/api/admin/events');
+    const rows = ev.items || [];
+    $('eventBody').innerHTML = rows.length ? rows.map((l) => `
+      <tr><td class="muted" style="white-space:nowrap">${dt(l.created_at)}</td>
+      <td><span class="pill">${esc(l.kind)}</span></td>
+      <td style="white-space:normal">${esc(l.message)}</td></tr>`).join('')
+      : '<tr><td colspan="3" class="empty">暂无事件</td></tr>';
   } catch (e) {
-    $('auditBody').innerHTML = `<tr><td colspan="5" class="empty">${e.message}</td></tr>`;
+    $('eventBody').innerHTML = `<tr><td colspan="3" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
 $('refreshOps').addEventListener('click', loadOps);
+
 $('settleBtn').addEventListener('click', async () => {
-  if (!confirm('确认执行收盘结算？将按当日收盘价结算所有持仓。')) return;
+  if (!confirm('确认执行日终结转？将解锁全部 T+1 持仓。')) return;
   try {
-    const d = await api('/api/admin/settle', { method: 'POST' });
-    banner('结算完成：' + JSON.stringify(d).slice(0, 120));
+    await api('/api/admin/settle', { method: 'POST' });
+    banner('结转完成');
     loadOps();
   } catch (e) { banner(e.message, 'err'); }
 });
 
-/* ---------------------------- 启动 ---------------------------- */
+/* ================================================================== *
+ * 启动
+ * ================================================================== */
 if (token()) {
   enterApp(null);
+  // 校验令牌是否还有效：失效会自动回到登录页
+  api('/api/admin/me').catch(() => {});
 } else {
   $('login').style.display = 'grid';
 }

@@ -5,7 +5,7 @@
 
 自包含特性：
 * 无外部行情数据源：全部行情由内置模拟引擎生成（GBM + OU 市场因子 + GARCH 波动率聚集 + 跳跃）；
-* 无外部 API：账户、撮合、结算、风控、审计全在 SQLite 内完成；
+* 无外部 API：账户、撮合、结算、风控全在 SQLite 内完成；
 * 启动只建表并注册引擎，不写入任何业务数据；标的/账户/日线在后台面板显式初始化（/admin）。
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from .bootstrap import bootstrap, start_engine, stop_engine
 from .config import settings
 from .engine.session import current_session
-from .routers import account, admin, auth, market, stream, trade
+from .routers import account, admin, auth, market, stream, trade, watch
 
 logging.basicConfig(
     level=logging.INFO,
@@ -100,6 +100,7 @@ app.include_router(market.router)
 app.include_router(trade.router)
 app.include_router(account.router)
 app.include_router(admin.router)
+app.include_router(watch.router)
 app.include_router(stream.router)
 
 
@@ -117,6 +118,8 @@ def root() -> dict:
             "/api/market/list",
             "/api/trade/order",
             "/api/account/summary",
+            "/api/watch/items",
+            "/api/market/index",
             "/api/admin/dashboard",
         ],
         "admin_panel": "/admin/",

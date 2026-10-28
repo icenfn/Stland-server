@@ -1,10 +1,15 @@
-"""数据库会话与初始化。SQLite + WAL，便于单实例高并发读。"""
+"""数据库会话与初始化。SQLite + WAL，便于单实例高并发读。
+
+本版对表结构做了一次不兼容重构（管理员独立成表、删除审计与风险档案表），
+因此 `init_db` 里带了一步「旧结构清理」：不再保留历史数据兼容逻辑，
+直接删除已经废弃的表与不合法的行，避免旧数据把新枚举读崩。
+"""
 from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -31,10 +36,32 @@ if settings.db_url.startswith("sqlite"):
         cur.close()
 
 
-def init_db() -> None:
-    """建表（幂等）。导入 models 以完成 SQLModel 元数据注册。"""
-    from . import models  # noqa: F401
+# 已废弃的表：审计日志、风险测评档案（本轮删除相关功能）
+_LEGACY_TABLES = ("auditlog", "riskassessment")
 
+
+def _purge_legacy() -> None:
+    """清理旧结构残留。
+
+    1) 删除已废弃的表（功能已移除，留着只会误导后来人）；
+    2) 删除 `user` 表里 role=admin 的历史行 —— 管理员已迁到独立的 `admin` 表，
+       而新 Role 枚举只有 retail/institution，旧行留着会在反序列化时报枚举错误。
+       这些旧管理员账户没有资金也没有持仓，直接丢弃最安全。
+    """
+    with engine.begin() as conn:
+        for table in _LEGACY_TABLES:
+            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+        try:
+            conn.execute(text("DELETE FROM user WHERE role = 'admin'"))
+        except Exception:  # 表还不存在（全新库）时忽略
+            pass
+
+
+def init_db() -> None:
+    """建表（幂等）并清理旧结构。"""
+    from . import models  # noqa: F401  触发元数据注册
+
+    _purge_legacy()
     SQLModel.metadata.create_all(engine)
 
 

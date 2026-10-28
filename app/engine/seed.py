@@ -110,8 +110,7 @@ SEED_USERS: tuple[SeedUser, ...] = (
     # 机构专业账户
     SeedUser("inst01", "Stland@2026", "磐石私募-稳健1号", "institution", 50_000_000, 20_000_000, 2),
     SeedUser("inst02", "Stland@2026", "潮汐量化-高频A", "institution", 80_000_000, 50_000_000, 3),
-    # 管理端
-    SeedUser("admin", "Stland@Admin2026", "交易所管理员", "admin", 0, 0, 1),
+    # 管理端已拆到独立表（Admin），种子数据里不再包含管理员
 )
 
 

@@ -22,6 +22,7 @@ from sqlmodel import Session, select
 
 from ..config import settings
 from ..db import engine
+from ..engine import index as index_engine
 from ..engine.market import market_engine
 from ..engine.session import current_session
 from ..models import Stock
@@ -40,9 +41,12 @@ def _snapshot() -> dict:
         for q in quotes
         if q["code"] in metas
     ]
+    # 指数统一由 engine/index.py 计算，保证 WS 推送与 HTTP /api/market/index 口径一致
+    indices = index_engine.index_list(session)
     return {
-        "index": market_engine.index_quote(),
-        "index_minutes": market_engine.index_minutes()[-120:],
+        "index": indices[0] if indices else {},
+        "indices": indices,
+        "index_minutes": index_engine.index_minutes(session, index_engine.INDEX_LIST[0], limit=120),
         "stats": market_engine.stats(),
         "session": {
             "phase": st.phase,

@@ -1,43 +1,137 @@
-"""管理端路由：运营总览、用户管理、风控、审计日志、系统事件、撮合统计。
+"""管理端路由：管理员登录、运营总览、配置管理、交易账户、管理员账户、标的、撮合。
 
-仅 role=admin 可访问，全部操作写入 AuditLog。
+本版三处结构性变化：
+1. **管理员独立登录**：`/api/admin/login` 只查 `admin` 表，签发的令牌 role 固定为
+   `admin`；交易账户的令牌在 `admin_user` 里会被直接拒绝。两条链路彻底隔离。
+2. **删除审计日志**：`AuditLog` 表与 `/audit` 接口、所有写入点一并移除。
+   运营动作的痕迹改由 `SystemEvent` 承担 —— 只记「发生了什么」，
+   不再记录「谁在什么 IP 对谁做了什么」这种合规留痕。
+3. **账户拆两张表展示**：交易账户（零售 + 机构，同一张 `user` 表按 role 过滤）
+   与管理员（独立的 `admin` 表）分开返回，不再混在一个列表里靠前端过滤。
 """
 from __future__ import annotations
 
-import json
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlmodel import Session, func, select
 
+from .. import runtime_config
+from ..config import settings
 from ..db import get_session
+from ..engine import index as index_engine
 from ..engine.market import market_engine
 from ..engine.session import current_session
 from ..models import (
     AccountStatus,
-    AuditLog,
+    Admin,
     CashFlow,
     DailyBar,
     Order,
     OrderStatus,
     Position,
-    RiskAssessment,
     Role,
     Stock,
     SystemEvent,
     Trade,
     User,
+    WatchGroup,
+    WatchItem,
 )
-from ..services.deps import admin_user
+from ..security import hash_password, verify_password
+from ..services.deps import admin_user, issue_admin_token
 from ..services.trading import settle_all
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
+LOCK_SECONDS = 300
 
+
+# --------------------------------------------------------------------------- #
+# 管理员登录 / 身份
+# --------------------------------------------------------------------------- #
+class AdminLoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=40)
+    password: str = Field(min_length=1, max_length=64)
+
+
+def admin_public(admin: Admin) -> dict:
+    return {
+        "id": admin.id,
+        "username": admin.username,
+        "display_name": admin.display_name or admin.username,
+        "is_active": admin.is_active,
+        "last_login_at": admin.last_login_at,
+        "created_at": admin.created_at,
+    }
+
+
+@router.post("/login")
+def admin_login(payload: AdminLoginIn, session: Session = Depends(get_session)) -> dict:
+    """管理员登录：只查 `admin` 表，与交易账户完全无关。"""
+    admin = session.exec(select(Admin).where(Admin.username == payload.username.lower())).first()
+    if admin is None or not admin.is_active:
+        raise HTTPException(401, detail={"code": "BAD_CREDENTIALS", "message": "用户名或口令错误"})
+
+    now = time.time()
+    if admin.locked_until > now:
+        wait = int(admin.locked_until - now)
+        raise HTTPException(
+            423, detail={"code": "LOCKED", "message": f"连续失败过多，请 {wait} 秒后重试"}
+        )
+
+    if not verify_password(payload.password, admin.password_hash):
+        admin.fail_count += 1
+        if admin.fail_count >= settings.login_fail_limit:
+            admin.locked_until = now + LOCK_SECONDS
+            admin.fail_count = 0
+        session.add(admin)
+        session.commit()
+        raise HTTPException(401, detail={"code": "BAD_CREDENTIALS", "message": "用户名或口令错误"})
+
+    admin.fail_count = 0
+    admin.locked_until = 0.0
+    admin.last_login_at = now
+    session.add(admin)
+    session.commit()
+    session.refresh(admin)
+    return {"admin": admin_public(admin), "token": issue_admin_token(admin)}
+
+
+@router.get("/me")
+def admin_me(admin: Admin = Depends(admin_user)) -> dict:
+    return {"admin": admin_public(admin)}
+
+
+class PasswordIn(BaseModel):
+    old_password: str = Field(min_length=1, max_length=64)
+    new_password: str = Field(min_length=8, max_length=64)
+
+
+@router.post("/password")
+def change_password(
+    payload: PasswordIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """修改自己的口令。首次登录后应立即改掉引导密码。"""
+    if not verify_password(payload.old_password, admin.password_hash):
+        raise HTTPException(400, detail={"code": "BAD_PASSWORD", "message": "原口令错误"})
+    admin.password_hash = hash_password(payload.new_password)
+    admin.updated_at = time.time()
+    session.add(admin)
+    session.commit()
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# 总览
+# --------------------------------------------------------------------------- #
 @router.get("/dashboard")
-def dashboard(session: Session = Depends(get_session), _: User = Depends(admin_user)) -> dict:
+def dashboard(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
     users = session.exec(select(User)).all()
+    admins = session.exec(select(Admin)).all()
     orders = session.exec(select(Order)).all()
     trades = session.exec(select(Trade)).all()
     positions = session.exec(select(Position)).all()
@@ -46,20 +140,23 @@ def dashboard(session: Session = Depends(get_session), _: User = Depends(admin_u
     total_asset = sum(u.total_asset or (u.cash + u.market_value) for u in users)
     today_orders = [o for o in orders if o.created_at >= today_start]
     today_trades = [t for t in trades if t.created_at >= today_start]
-    turnover = sum(t.amount for t in today_trades)
 
     st = current_session()
     return {
         "kpi": {
             "user_count": len(users),
+            "retail_count": sum(1 for u in users if u.role == Role.RETAIL),
+            "institution_count": sum(1 for u in users if u.role == Role.INSTITUTION),
+            "admin_count": len(admins),
             "active_users": sum(1 for u in users if u.status == AccountStatus.ACTIVE),
             "frozen_users": sum(1 for u in users if u.status == AccountStatus.FROZEN),
             "total_asset": round(total_asset, 2),
             "today_orders": len(today_orders),
             "today_trades": len(today_trades),
-            "today_turnover": round(turnover, 2),
+            "today_turnover": round(sum(t.amount for t in today_trades), 2),
             "open_orders": sum(1 for o in orders if o.status in (OrderStatus.PENDING, OrderStatus.PARTIAL)),
             "position_rows": len(positions),
+            "watch_items": session.exec(select(func.count()).select_from(WatchItem)).one(),
         },
         "market": market_engine.stats(),
         "session": {
@@ -68,24 +165,101 @@ def dashboard(session: Session = Depends(get_session), _: User = Depends(admin_u
             "can_trade": st.can_trade,
             "trade_date": st.trade_date,
         },
-        "role_distribution": {
-            r: sum(1 for u in users if u.role.value == r) for r in ("retail", "institution", "admin")
-        },
+        "risk_distribution": _risk_distribution(session),
     }
 
 
-@router.get("/users")
-def list_users(
-    keyword: str = Query(default="", max_length=20),
-    limit: int = Query(default=100, ge=1, le=500),
+def _risk_distribution(session: Session) -> dict:
+    """风险偏好分布：多少账户未测评、多少是保守/稳健/进取（只看交易账户）。"""
+    rows = session.exec(select(User)).all()
+    dist = {"unassessed": 0, "conservative": 0, "balanced": 0, "aggressive": 0}
+    for u in rows:
+        if u.risk_assessed_at <= 0 or u.risk_level <= 0:
+            dist["unassessed"] += 1
+        elif u.risk_level <= 1:
+            dist["conservative"] += 1
+        elif u.risk_level == 2:
+            dist["balanced"] += 1
+        else:
+            dist["aggressive"] += 1
+    return {"total": len(rows), **dist}
+
+
+# --------------------------------------------------------------------------- #
+# 运行期配置
+# --------------------------------------------------------------------------- #
+@router.get("/settings")
+def get_settings(admin: Admin = Depends(admin_user)) -> dict:
+    """全部可调配置项及其当前值（含类型、范围、说明，前端据此渲染表单）。"""
+    return {"items": runtime_config.snapshot()}
+
+
+class SettingsIn(BaseModel):
+    """批量更新：只传要改的键，未传的保持原值。"""
+
+    values: dict[str, object] = Field(default_factory=dict)
+
+
+@router.put("/settings")
+def put_settings(
+    payload: SettingsIn,
     session: Session = Depends(get_session),
-    _: User = Depends(admin_user),
+    admin: Admin = Depends(admin_user),
 ) -> dict:
-    rows = session.exec(select(User).limit(limit)).all()
+    """修改运行期配置：校验通过后立即写到内存 settings，下一次请求即生效。"""
+    if not payload.values:
+        raise HTTPException(400, detail={"code": "EMPTY", "message": "没有需要修改的配置"})
+    result = runtime_config.update(session, payload.values, operator=admin.username)
+    if result["updated"]:
+        session.add(
+            SystemEvent(
+                kind="config_update",
+                message=f"管理员 {admin.username} 修改配置：{', '.join(result['updated'])}",
+            )
+        )
+        session.commit()
+    return result
+
+
+@router.post("/settings/reset")
+def reset_settings(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    """恢复全部配置为代码默认值。"""
+    result = runtime_config.reset_defaults(session, operator=admin.username)
+    session.add(SystemEvent(kind="config_reset", message=f"管理员 {admin.username} 恢复默认配置"))
+    session.commit()
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# 交易账户（零售 + 机构，同一张表）
+# --------------------------------------------------------------------------- #
+@router.get("/accounts")
+def list_accounts(
+    role: str = Query(default="retail", max_length=16),
+    keyword: str = Query(default="", max_length=20),
+    limit: int = Query(default=200, ge=1, le=500),
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """按角色列出交易账户。零售与机构共用 `user` 表，这里只做 role 过滤。
+
+    管理员已独立成表，因此本接口不会返回管理员 —— 想看管理员请用 `/admins`。
+    """
+    if role not in {"retail", "institution"}:
+        raise HTTPException(
+            400, detail={"code": "BAD_ROLE", "message": "role 仅支持 retail/institution"}
+        )
+    target = Role(role)
+    rows = session.exec(
+        select(User).where(User.role == target).order_by(User.created_at.desc()).limit(limit)
+    ).all()
     items = []
     for u in rows:
         if keyword and keyword not in u.username and keyword not in (u.display_name or ""):
             continue
+        pos_count = session.exec(
+            select(func.count()).select_from(Position).where(Position.user_id == u.id, Position.quantity > 0)
+        ).one()
         items.append(
             {
                 "id": u.id,
@@ -98,42 +272,104 @@ def list_users(
                 "market_value": round(u.market_value, 2),
                 "total_asset": round(u.total_asset, 2),
                 "realized_pnl": round(u.realized_pnl, 2),
+                "credit_limit": round(u.credit_limit, 2),
                 "risk_level": u.risk_level,
+                "risk_assessed": u.risk_assessed_at > 0,
+                "positions": pos_count,
                 "last_login_at": u.last_login_at,
                 "created_at": u.created_at,
             }
         )
-    return {"total": len(items), "items": items}
+    return {"role": role, "total": len(items), "items": items}
+
+
+class AccountIn(BaseModel):
+    username: str = Field(min_length=2, max_length=40)
+    display_name: str = Field(default="", max_length=40)
+    password: str = Field(min_length=6, max_length=64)
+    role: str = Field(default="retail", max_length=16)
+    cash: float = Field(default=1_000_000.0, ge=0)
+    credit_limit: float = Field(default=0.0, ge=0)
+
+
+@router.post("/accounts")
+def create_account(
+    payload: AccountIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """新建交易账户（零售或机构）。管理员请用 `/admins`。"""
+    if payload.role not in {"retail", "institution"}:
+        raise HTTPException(
+            400,
+            detail={"code": "BAD_ROLE", "message": "role 仅支持 retail/institution；管理员请用管理员接口"},
+        )
+    if session.exec(select(User).where(User.username == payload.username)).first() is not None:
+        raise HTTPException(400, detail={"code": "DUP_USERNAME", "message": f"用户名 {payload.username} 已存在"})
+
+    user = User(
+        username=payload.username,
+        display_name=payload.display_name or payload.username,
+        password_hash=hash_password(payload.password),
+        role=Role(payload.role),
+        status=AccountStatus.ACTIVE,
+        cash=payload.cash,
+        total_asset=payload.cash,
+        credit_limit=payload.credit_limit if payload.role == "institution" else 0.0,
+    )
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    # 新账户落一个默认自选分组，客户端首屏不必处理"无分组"分支
+    session.add(WatchGroup(user_id=user.id or 0, name="默认分组", sort=0))
+    session.add(SystemEvent(kind="account_create", message=f"{payload.role}:{payload.username} 由管理员创建"))
+    session.commit()
+    return {"ok": True, "id": user.id, "username": user.username, "role": user.role.value}
+
+
+@router.delete("/accounts/{user_id}")
+def delete_account(
+    user_id: int,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """删除交易账户，连同其持仓、挂单、流水、自选一并清理。"""
+    target = session.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, detail={"code": "USER_NOT_FOUND", "message": "账户不存在"})
+
+    for model in (Position, Order, Trade, CashFlow):
+        for row in session.exec(select(model).where(model.user_id == user_id)).all():
+            session.delete(row)
+    for model in (WatchItem, WatchGroup):
+        for row in session.exec(select(model).where(model.user_id == user_id)).all():
+            session.delete(row)
+    session.delete(target)
+    session.add(SystemEvent(kind="account_delete", message=f"{target.role.value}:{target.username} 已被删除"))
+    session.commit()
+    return {"ok": True}
 
 
 class UserStatusIn(BaseModel):
     status: AccountStatus
 
 
-@router.post("/users/{user_id}/status")
-def update_user_status(
+@router.post("/accounts/{user_id}/status")
+def update_account_status(
     user_id: int,
     payload: UserStatusIn,
-    request: Request,
     session: Session = Depends(get_session),
-    admin: User = Depends(admin_user),
+    admin: Admin = Depends(admin_user),
 ) -> dict:
+    """冻结 / 解冻 / 注销交易账户。"""
     target = session.get(User, user_id)
     if target is None:
-        raise HTTPException(404, detail={"code": "USER_NOT_FOUND", "message": "用户不存在"})
-    if target.role.value == "admin" and payload.status != AccountStatus.ACTIVE:
-        raise HTTPException(400, detail={"code": "PROTECTED", "message": "不允许冻结管理员账户"})
+        raise HTTPException(404, detail={"code": "USER_NOT_FOUND", "message": "账户不存在"})
     target.status = payload.status
     target.updated_at = time.time()
     session.add(target)
     session.add(
-        AuditLog(
-            user_id=admin.id,
-            username=admin.username,
-            action="user_status",
-            detail=f"{target.username} -> {payload.status.value}",
-            ip=request.client.host if request.client else "",
-        )
+        SystemEvent(kind="account_status", message=f"{target.username} -> {payload.status.value}")
     )
     session.commit()
     return {"ok": True, "status": target.status.value}
@@ -144,17 +380,17 @@ class AdjustIn(BaseModel):
     remark: str = Field(default="", max_length=80)
 
 
-@router.post("/users/{user_id}/adjust")
+@router.post("/accounts/{user_id}/adjust")
 def adjust_cash(
     user_id: int,
     payload: AdjustIn,
-    request: Request,
     session: Session = Depends(get_session),
-    admin: User = Depends(admin_user),
+    admin: Admin = Depends(admin_user),
 ) -> dict:
+    """调整账户可用资金（入金/出金），并写一条流水。"""
     target = session.get(User, user_id)
     if target is None:
-        raise HTTPException(404, detail={"code": "USER_NOT_FOUND", "message": "用户不存在"})
+        raise HTTPException(404, detail={"code": "USER_NOT_FOUND", "message": "账户不存在"})
     before = target.cash
     new_cash = round(target.cash + payload.amount, 4)
     if new_cash < 0:
@@ -173,21 +409,97 @@ def adjust_cash(
             remark=payload.remark or "管理端资金调整",
         )
     )
-    session.add(
-        AuditLog(
-            user_id=admin.id,
-            username=admin.username,
-            action="adjust_cash",
-            detail=f"{target.username} {payload.amount:+.2f}",
-            ip=request.client.host if request.client else "",
-        )
-    )
     session.commit()
     return {"ok": True, "cash": target.cash, "total_asset": target.total_asset}
 
 
+# --------------------------------------------------------------------------- #
+# 管理员账户（独立表）
+# --------------------------------------------------------------------------- #
+@router.get("/admins")
+def list_admins(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    rows = session.exec(select(Admin).order_by(Admin.created_at.desc())).all()
+    return {"total": len(rows), "items": [admin_public(a) for a in rows]}
+
+
+class AdminIn(BaseModel):
+    username: str = Field(min_length=2, max_length=40)
+    display_name: str = Field(default="", max_length=40)
+    password: str = Field(min_length=8, max_length=64)
+
+
+@router.post("/admins")
+def create_admin(
+    payload: AdminIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """新增管理员。用户名在 admin 表内唯一（与交易账户同名不冲突，是两套体系）。"""
+    username = payload.username.lower()
+    if session.exec(select(Admin).where(Admin.username == username)).first() is not None:
+        raise HTTPException(400, detail={"code": "DUP_USERNAME", "message": f"管理员 {username} 已存在"})
+    row = Admin(
+        username=username,
+        display_name=payload.display_name or username,
+        password_hash=hash_password(payload.password),
+        is_active=True,
+    )
+    session.add(row)
+    session.add(SystemEvent(kind="admin_create", message=f"新增管理员 {username}"))
+    session.commit()
+    session.refresh(row)
+    return {"ok": True, "admin": admin_public(row)}
+
+
+@router.delete("/admins/{admin_id}")
+def delete_admin(
+    admin_id: int,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """删除管理员。保护：不能删自己，也不能删最后一个管理员。"""
+    target = session.get(Admin, admin_id)
+    if target is None:
+        raise HTTPException(404, detail={"code": "ADMIN_NOT_FOUND", "message": "管理员不存在"})
+    if target.id == admin.id:
+        raise HTTPException(400, detail={"code": "SELF_DELETE", "message": "不能删除当前登录的管理员"})
+    total = session.exec(select(func.count()).select_from(Admin)).one()
+    if total <= 1:
+        raise HTTPException(400, detail={"code": "LAST_ADMIN", "message": "至少保留一个管理员"})
+    session.delete(target)
+    session.add(SystemEvent(kind="admin_delete", message=f"管理员 {target.username} 被删除"))
+    session.commit()
+    return {"ok": True}
+
+
+class AdminStatusIn(BaseModel):
+    is_active: bool
+
+
+@router.post("/admins/{admin_id}/status")
+def set_admin_status(
+    admin_id: int,
+    payload: AdminStatusIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    target = session.get(Admin, admin_id)
+    if target is None:
+        raise HTTPException(404, detail={"code": "ADMIN_NOT_FOUND", "message": "管理员不存在"})
+    if target.id == admin.id and not payload.is_active:
+        raise HTTPException(400, detail={"code": "SELF_DISABLE", "message": "不能停用当前登录的管理员"})
+    target.is_active = payload.is_active
+    target.updated_at = time.time()
+    session.add(target)
+    session.commit()
+    return {"ok": True, "is_active": target.is_active}
+
+
+# --------------------------------------------------------------------------- #
+# 标的
+# --------------------------------------------------------------------------- #
 @router.get("/stocks")
-def list_stocks(session: Session = Depends(get_session), _: User = Depends(admin_user)) -> dict:
+def list_stocks(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
     rows = session.exec(select(Stock)).all()
     quotes = market_engine.quotes()
     return {
@@ -201,6 +513,9 @@ def list_stocks(session: Session = Depends(get_session), _: User = Depends(admin
                 "limit_up": s.limit_up,
                 "limit_down": s.limit_down,
                 "prev_close": s.prev_close,
+                "vol": s.vol,
+                "beta": s.beta,
+                "liquidity": s.liquidity,
                 **(quotes.get(s.code) or {}),
             }
             for s in rows
@@ -208,45 +523,178 @@ def list_stocks(session: Session = Depends(get_session), _: User = Depends(admin
     }
 
 
-@router.get("/audit")
-def audit_logs(
-    limit: int = Query(default=100, ge=1, le=500),
+@router.get("/indices")
+def list_indices(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    """指数列表（只读）。指数由成分股合成，不可手工新建。"""
+    return {"items": index_engine.index_list(session)}
+
+
+class StockIn(BaseModel):
+    code: str = Field(max_length=12)
+    name: str = Field(max_length=24)
+    board: str = Field(default="主板", max_length=12)
+    industry: str = Field(default="", max_length=24)
+    hotword: str = Field(default="", max_length=40)
+    theme: str = Field(default="", max_length=80)
+    init_price: float = Field(default=10.0, gt=0)
+    vol: float = Field(default=0.35, gt=0, le=3.0)
+    beta: float = Field(default=1.0, gt=0, le=5.0)
+    drift: float = Field(default=0.0, ge=-0.5, le=0.5)
+    liquidity: float = Field(default=1.0, gt=0, le=10.0)
+    float_shares: float = Field(default=5e8, gt=0)
+
+
+LIMIT_BY_BOARD = {"主板": 0.10, "创业板": 0.20, "科创板": 0.20, "北交所": 0.30}
+
+
+def _apply(stock: Stock, payload: StockIn) -> Stock:
+    pct = LIMIT_BY_BOARD.get(payload.board, 0.10)
+    stock.name = payload.name
+    stock.board = payload.board
+    stock.industry = payload.industry
+    stock.hotword = payload.hotword
+    stock.theme = payload.theme
+    stock.init_price = payload.init_price
+    stock.prev_close = payload.init_price
+    stock.limit_up = round(payload.init_price * (1 + pct), 2)
+    stock.limit_down = round(payload.init_price * (1 - pct), 2)
+    stock.vol = payload.vol
+    stock.beta = payload.beta
+    stock.drift = payload.drift
+    stock.liquidity = payload.liquidity
+    stock.float_shares = payload.float_shares
+    stock.total_shares = payload.float_shares * 1.55
+    return stock
+
+
+def _register(stock: Stock) -> None:
+    pct = LIMIT_BY_BOARD.get(stock.board, 0.10)
+    market_engine.register(
+        code=stock.code,
+        name=stock.name,
+        init_price=stock.prev_close or stock.init_price,
+        tick_size=stock.tick_size,
+        limit_up_pct=pct,
+        beta=stock.beta,
+        drift=stock.drift,
+        vol=stock.vol,
+        liquidity=stock.liquidity,
+        float_shares=stock.float_shares,
+    )
+
+
+@router.post("/stocks")
+def create_stock(
+    payload: StockIn,
     session: Session = Depends(get_session),
-    _: User = Depends(admin_user),
+    admin: Admin = Depends(admin_user),
 ) -> dict:
-    rows = session.exec(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)).all()
-    return {
-        "items": [
-            {
-                "id": r.id,
-                "username": r.username,
-                "action": r.action,
-                "detail": r.detail,
-                "ip": r.ip,
-                "created_at": r.created_at,
-            }
-            for r in rows
-        ]
-    }
+    if session.get(Stock, payload.code) is not None:
+        raise HTTPException(400, detail={"code": "DUP_CODE", "message": f"标的 {payload.code} 已存在"})
+    stock = _apply(Stock(code=payload.code, tick_size=0.01, lot_size=100), payload)
+    session.add(stock)
+    session.add(SystemEvent(kind="stock_create", message=f"{payload.code} {payload.name} 由管理员新增"))
+    session.commit()
+    _register(stock)
+    return {"ok": True, "code": stock.code}
 
 
-@router.get("/events")
-def events(
-    limit: int = Query(default=50, ge=1, le=200),
+@router.put("/stocks/{code}")
+def update_stock(
+    code: str,
+    payload: StockIn,
     session: Session = Depends(get_session),
-    _: User = Depends(admin_user),
+    admin: Admin = Depends(admin_user),
 ) -> dict:
-    rows = session.exec(select(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(limit)).all()
-    return {
-        "items": [
-            {"kind": r.kind, "message": r.message, "created_at": r.created_at} for r in rows
-        ]
-    }
+    stock = session.get(Stock, code)
+    if stock is None:
+        raise HTTPException(404, detail={"code": "STOCK_NOT_FOUND", "message": "标的不存在"})
+    if payload.code != code:
+        raise HTTPException(400, detail={"code": "CODE_IMMUTABLE", "message": "代码不可修改，如需换码请删除后新增"})
+    _apply(stock, payload)
+    session.add(stock)
+    session.add(SystemEvent(kind="stock_update", message=f"{code} {payload.name} 参数已更新"))
+    session.commit()
+    _register(stock)
+    return {"ok": True, "code": code}
 
 
+@router.delete("/stocks/{code}")
+def delete_stock(
+    code: str,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    stock = session.get(Stock, code)
+    if stock is None:
+        raise HTTPException(404, detail={"code": "STOCK_NOT_FOUND", "message": "标的不存在"})
+    held = session.exec(select(Position).where(Position.code == code, Position.quantity > 0)).all()
+    if held:
+        raise HTTPException(
+            400,
+            detail={"code": "STOCK_HELD", "message": f"仍有 {len(held)} 个账户持有该标的，请先处理持仓"},
+        )
+    session.delete(stock)
+    # 记一条事件，bootstrap 看到它就不会把该种子标的加回来
+    session.add(SystemEvent(kind="stock_removed", message=f"{code} 已下线"))
+    session.add(SystemEvent(kind="stock_delete", message=f"{code} {stock.name} 被删除"))
+    session.commit()
+    market_engine.unregister(code)
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# 数据初始化（手动注入，幂等）
+# --------------------------------------------------------------------------- #
+class SeedIn(BaseModel):
+    stocks: bool = True
+    users: bool = True
+    history: bool = True
+
+
+@router.post("/seed")
+def seed_data(
+    payload: SeedIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """手动注入标准数据集。`ensure_*` 全部幂等，重复点击不会产生副本。"""
+    from ..bootstrap import init_seed_data
+
+    result = init_seed_data(
+        include_stocks=payload.stocks,
+        include_users=payload.users,
+        include_history=payload.history,
+    )
+    session.add(
+        SystemEvent(
+            kind="seed",
+            message=(
+                f"管理员 {admin.username} 注入数据：stocks={payload.stocks},users={payload.users},"
+                f"history={payload.history} → +{result['stocks_added']}/+{result['users_added']}/"
+                f"+{result['daily_bars_added']}"
+            ),
+        )
+    )
+    session.commit()
+    return {"ok": True, **result}
+
+
+@router.get("/seed/status")
+def seed_status(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    stocks = session.exec(select(func.count()).select_from(Stock)).one()
+    users = session.exec(select(func.count()).select_from(User)).one()
+    admins = session.exec(select(func.count()).select_from(Admin)).one()
+    bars = session.exec(select(func.count()).select_from(DailyBar)).one()
+    return {"stocks": stocks, "users": users, "admins": admins, "daily_bars": bars, "seeded": stocks > 0}
+
+
+# --------------------------------------------------------------------------- #
+# 撮合 / 业绩 / 系统事件 / 结算
+# --------------------------------------------------------------------------- #
 @router.get("/matching")
-def matching_stats(session: Session = Depends(get_session), _: User = Depends(admin_user)) -> dict:
-    """撮合撮成率、平均单笔金额、各标的成交分布——运营侧观察市场质量。"""
+def matching_stats(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    """撮合质量：成交率、撤单率、平均单笔金额、成交额 Top 标的。"""
     orders = session.exec(select(Order)).all()
     trades = session.exec(select(Trade)).all()
     filled = sum(1 for o in orders if o.status == OrderStatus.FILLED)
@@ -275,30 +723,10 @@ def matching_stats(session: Session = Depends(get_session), _: User = Depends(ad
     }
 
 
-@router.post("/settle")
-def settle(request: Request, session: Session = Depends(get_session), admin: User = Depends(admin_user)) -> dict:
-    """执行日终结转（T+1 解锁）+ 记录系统事件。"""
-    settle_all(session)
-    session.add(
-        SystemEvent(kind="settle", message=f"管理员 {admin.username} 触发日终结转")
-    )
-    session.add(
-        AuditLog(
-            user_id=admin.id,
-            username=admin.username,
-            action="settle",
-            detail="日终结转",
-            ip=request.client.host if request.client else "",
-        )
-    )
-    session.commit()
-    return {"ok": True, "at": int(time.time())}
-
-
 @router.get("/leaderboard")
-def leaderboard(session: Session = Depends(get_session), _: User = Depends(admin_user)) -> dict:
-    """按总资产收益率排名（以初始资金为基准估算）。"""
-    rows = session.exec(select(User).where(User.role != "admin" if False else User.id > 0)).all()
+def leaderboard(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    """按总资产排名（交易账户）。"""
+    rows = session.exec(select(User)).all()
     items = [
         {
             "username": u.username,
@@ -309,448 +737,35 @@ def leaderboard(session: Session = Depends(get_session), _: User = Depends(admin
             "return_pct": round(u.realized_pnl / u.total_asset * 100, 2) if u.total_asset else 0.0,
         }
         for u in rows
-        if u.role.value != "admin"
     ]
     items.sort(key=lambda x: x["total_asset"], reverse=True)
     return {"items": items}
 
-class StockIn(BaseModel):
-    """新增 / 修改标的的入参。仅覆盖运营真正会调的字段。"""
 
-    code: str = Field(max_length=12, description="6 位 A 股代码")
-    name: str = Field(max_length=24)
-    board: str = Field(default="主板", max_length=12)
-    industry: str = Field(default="", max_length=24)
-    hotword: str = Field(default="", max_length=40)
-    theme: str = Field(default="", max_length=80)
-    init_price: float = Field(default=10.0, gt=0)
-    vol: float = Field(default=0.35, gt=0, le=3.0)
-    beta: float = Field(default=1.0, gt=0, le=5.0)
-    drift: float = Field(default=0.0, ge=-0.5, le=0.5)
-    liquidity: float = Field(default=1.0, gt=0, le=10.0)
-    float_shares: float = Field(default=5e8, gt=0)
-
-
-LIMIT_BY_BOARD = {"主板": 0.10, "创业板": 0.20, "科创板": 0.20, "北交所": 0.30}
-
-
-def _apply(stock: Stock, payload: StockIn) -> Stock:
-    """把入参写进 Stock 行，并同步涨跌停与价格格子。"""
-    pct = LIMIT_BY_BOARD.get(payload.board, 0.10)
-    stock.name = payload.name
-    stock.board = payload.board
-    stock.industry = payload.industry
-    stock.hotword = payload.hotword
-    stock.theme = payload.theme
-    stock.init_price = payload.init_price
-    stock.prev_close = payload.init_price
-    stock.limit_up = round(payload.init_price * (1 + pct), 2)
-    stock.limit_down = round(payload.init_price * (1 - pct), 2)
-    stock.vol = payload.vol
-    stock.beta = payload.beta
-    stock.drift = payload.drift
-    stock.liquidity = payload.liquidity
-    stock.float_shares = payload.float_shares
-    stock.total_shares = payload.float_shares * 1.55
-    return stock
-
-
-def _register(stock: Stock) -> None:
-    """把库内标的同步进内存行情引擎（新增与修改都要走一遍）。"""
-    pct = LIMIT_BY_BOARD.get(stock.board, 0.10)
-    market_engine.register(
-        code=stock.code,
-        name=stock.name,
-        init_price=stock.prev_close or stock.init_price,
-        tick_size=stock.tick_size,
-        limit_up_pct=pct,
-        beta=stock.beta,
-        drift=stock.drift,
-        vol=stock.vol,
-        liquidity=stock.liquidity,
-        float_shares=stock.float_shares,
-    )
-
-
-@router.post("/stocks")
-def create_stock(
-    payload: StockIn,
-    request: Request,
+@router.get("/events")
+def events(
+    limit: int = Query(default=80, ge=1, le=300),
     session: Session = Depends(get_session),
-    admin: User = Depends(admin_user),
+    admin: Admin = Depends(admin_user),
 ) -> dict:
-    """新增标的：写库 + 注册到行情引擎，立即可以交易。
+    """系统事件时间线（替代原来的审计日志）。"""
+    rows = session.exec(select(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(limit)).all()
+    return {"items": [{"kind": r.kind, "message": r.message, "created_at": r.created_at} for r in rows]}
 
-    内置的 28 支只是「默认标的」，运营可以随时增删改，不再被硬编码锁死。
-    """
-    if session.get(Stock, payload.code) is not None:
-        raise HTTPException(400, detail={"code": "DUP_CODE", "message": f"标的 {payload.code} 已存在"})
-    stock = _apply(Stock(code=payload.code, tick_size=0.01, lot_size=100), payload)
-    session.add(stock)
-    session.add(
-        AuditLog(
-            user_id=admin.id,
-            username=admin.username,
-            action="stock_create",
-            detail=f"{payload.code} {payload.name}",
-            ip=request.client.host if request.client else "",
-        )
-    )
+
+@router.post("/settle")
+def settle(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    """执行日终结转（T+1 解锁）。"""
+    settle_all(session)
+    session.add(SystemEvent(kind="settle", message=f"管理员 {admin.username} 触发日终结转"))
     session.commit()
-    _register(stock)
-    return {"ok": True, "code": stock.code}
+    return {"ok": True, "at": int(time.time())}
 
 
-@router.put("/stocks/{code}")
-def update_stock(
-    code: str,
-    payload: StockIn,
-    request: Request,
-    session: Session = Depends(get_session),
-    admin: User = Depends(admin_user),
-) -> dict:
-    """修改标的参数（改名、换板块、调波动率等），改完立即在引擎生效。"""
-    stock = session.get(Stock, code)
-    if stock is None:
-        raise HTTPException(404, detail={"code": "STOCK_NOT_FOUND", "message": "标的不存在"})
-    if payload.code != code:
-        raise HTTPException(400, detail={"code": "CODE_IMMUTABLE", "message": "代码不可修改，如需换码请删除后新增"})
-    _apply(stock, payload)
-    session.add(stock)
-    session.add(
-        AuditLog(
-            user_id=admin.id,
-            username=admin.username,
-            action="stock_update",
-            detail=f"{code} {payload.name}",
-            ip=request.client.host if request.client else "",
-        )
-    )
-    session.commit()
-    # 引擎里已存在该代码时 register 会覆盖其状态，等价于「热更新参数」
-    _register(stock)
-    return {"ok": True, "code": code}
-
-
-@router.delete("/stocks/{code}")
-def delete_stock(
-    code: str,
-    request: Request,
-    session: Session = Depends(get_session),
-    admin: User = Depends(admin_user),
-) -> dict:
-    """下线标的：删库内记录 + 从行情引擎摘除。
-
-    记一条 SystemEvent 表示「运营主动删除」，bootstrap 看到它就不会在
-    下次启动时把这条种子数据又加回来。
-    """
-    stock = session.get(Stock, code)
-    if stock is None:
-        raise HTTPException(404, detail={"code": "STOCK_NOT_FOUND", "message": "标的不存在"})
-    held = session.exec(select(Position).where(Position.code == code, Position.quantity > 0)).all()
-    if held:
-        raise HTTPException(
-            400,
-            detail={
-                "code": "STOCK_HELD",
-                "message": f"仍有 {len(held)} 个账户持有该标的，请先处理持仓后再下线",
-            },
-        )
-    session.delete(stock)
-    session.add(
-        SystemEvent(kind="stock_removed", message=f"{code} 已由 {admin.username} 下线")
-    )
-    session.add(
-        AuditLog(
-            user_id=admin.id,
-            username=admin.username,
-            action="stock_delete",
-            detail=f"{code} {stock.name}",
-            ip=request.client.host if request.client else "",
-        )
-    )
-    session.commit()
-    market_engine.unregister(code)
-    return {"ok": True}
-
-# ---------------------------------------------------------------------------
-# 数据初始化：从「启动时自动注入」改为「后台手动点击注入」
-# ---------------------------------------------------------------------------
-
-
-class SeedIn(BaseModel):
-    """初始化入参：可以选择只注入其中一部分，避免重复覆盖。"""
-
-    stocks: bool = True
-    users: bool = True
-    history: bool = True
-
-
-@router.post("/seed")
-def seed_data(
-    payload: SeedIn,
-    request: Request,
-    session: Session = Depends(get_session),
-    admin: User = Depends(admin_user),
-) -> dict:
-    """手动注入标准数据集（28 支标的 + 种子账户 + 历史日线）。
-
-    为什么改成手动
-    --------------
-    启动时自动注入会带来三个问题：运营删掉的账户重启后复活、空库无法从零搭建、
-    也无法区分「系统自带」与「运营录入」。改成后台按钮后，注入是一次
-    显式、可审计的管理动作；且 ensure_* 全部幂等，重复点击不会产生副本。
-    """
-    from ..bootstrap import init_seed_data
-
-    result = init_seed_data(
-        include_stocks=payload.stocks,
-        include_users=payload.users,
-        include_history=payload.history,
-    )
-    session.add(
-        AuditLog(
-            user_id=admin.id,
-            username=admin.username,
-            action="seed_data",
-            detail=(
-                f"stocks={payload.stocks},users={payload.users},history={payload.history} "
-                f"→ +{result['stocks_added']}/+{result['users_added']}/+{result['daily_bars_added']}"
-            ),
-            ip=request.client.host if request.client else "",
-        )
-    )
-    session.commit()
-    return {"ok": True, **result}
-
-
-@router.get("/seed/status")
-def seed_status(session: Session = Depends(get_session), _: User = Depends(admin_user)) -> dict:
-    """初始化状态：库里已有多少标的/账户/日线，用于面板按钮的提示文案。"""
-    from sqlmodel import func
-
-    stocks = session.exec(select(func.count()).select_from(Stock)).one()
-    users = session.exec(select(func.count()).select_from(User)).one()
-    bars = session.exec(select(func.count()).select_from(DailyBar)).one()
-    return {"stocks": stocks, "users": users, "daily_bars": bars, "seeded": stocks > 0}
-
-
-# ---------------------------------------------------------------------------
-# 账户：按角色分组（零售 / 机构 / 管理员），三套人群口径完全分开
-# ---------------------------------------------------------------------------
-
-ROLE_GROUPS = {
-    "retail": Role.RETAIL,
-    "institution": Role.INSTITUTION,
-    "admin": Role.ADMIN,
-}
-
-
-@router.get("/accounts")
-def list_accounts(
-    role: str = Query(default="retail", max_length=16),
-    keyword: str = Query(default="", max_length=20),
-    limit: int = Query(default=200, ge=1, le=500),
-    session: Session = Depends(get_session),
-    _: User = Depends(admin_user),
-) -> dict:
-    """按角色列出账户。role=retail/institution/admin，前端用三个页签分开。
-
-    这里刻意不复用 /users：那个接口是「全量人员搜索」，而本接口是
-    「按账户类型运营」——三类账户的资金口径、额度、风控规则完全不同
-    （机构有 credit_limit，管理员不参与交易），分开查更贴合后台的实际用法。
-    """
-    if role not in ROLE_GROUPS:
-        raise HTTPException(400, detail={"code": "BAD_ROLE", "message": "role 仅支持 retail/institution/admin"})
-    target = ROLE_GROUPS[role]
-    rows = session.exec(
-        select(User).where(User.role == target).order_by(User.created_at.desc()).limit(limit)
-    ).all()
-    items = []
-    for u in rows:
-        if keyword and keyword not in u.username and keyword not in (u.display_name or ""):
-            continue
-        positions = session.exec(
-            select(func.count()).select_from(Position).where(Position.user_id == u.id, Position.quantity > 0)
-        ).one()
-        items.append(
-            {
-                "id": u.id,
-                "username": u.username,
-                "display_name": u.display_name or u.username,
-                "role": u.role.value,
-                "status": u.status.value,
-                "cash": round(u.cash, 2),
-                "frozen_cash": round(u.frozen_cash, 2),
-                "market_value": round(u.market_value, 2),
-                "total_asset": round(u.total_asset, 2),
-                "realized_pnl": round(u.realized_pnl, 2),
-                "credit_limit": round(u.credit_limit, 2),
-                "risk_level": u.risk_level,
-                "positions": positions,
-                "last_login_at": u.last_login_at,
-                "created_at": u.created_at,
-            }
-        )
-    return {"role": role, "total": len(items), "items": items}
-
-
-class AccountIn(BaseModel):
-    """新建账户。密码只在这里出现一次，落库即哈希。"""
-
-    username: str = Field(min_length=2, max_length=40)
-    display_name: str = Field(default="", max_length=40)
-    password: str = Field(min_length=6, max_length=64)
-    role: str = Field(default="retail", max_length=16)
-    cash: float = Field(default=1000000.0, ge=0)
-    credit_limit: float = Field(default=0.0, ge=0)
-
-
-@router.post("/accounts")
-def create_account(
-    payload: AccountIn,
-    request: Request,
-    session: Session = Depends(get_session),
-    admin: User = Depends(admin_user),
-) -> dict:
-    """新建账户：零售 / 机构 / 管理员共用同一张表，靠 role 区分。"""
-    if payload.role not in ROLE_GROUPS:
-        raise HTTPException(400, detail={"code": "BAD_ROLE", "message": "role 仅支持 retail/institution/admin"})
-    exists = session.exec(select(User).where(User.username == payload.username)).first()
-    if exists is not None:
-        raise HTTPException(400, detail={"code": "DUP_USERNAME", "message": f"用户名 {payload.username} 已存在"})
-    from ..security import hash_password
-
-    user = User(
-        username=payload.username,
-        display_name=payload.display_name or payload.username,
-        password_hash=hash_password(payload.password),
-        role=ROLE_GROUPS[payload.role],
-        status=AccountStatus.ACTIVE,
-        cash=payload.cash,
-        total_asset=payload.cash,
-        credit_limit=payload.credit_limit if payload.role == "institution" else 0.0,
-        risk_level=1,
-    )
-    session.add(user)
-    session.add(
-        AuditLog(
-            user_id=admin.id,
-            username=admin.username,
-            action="account_create",
-            detail=f"{payload.role}:{payload.username} 初始资金 {payload.cash:.2f}",
-            ip=request.client.host if request.client else "",
-        )
-    )
-    session.commit()
-    session.refresh(user)
-    return {"ok": True, "id": user.id, "username": user.username, "role": user.role.value}
-
-
-@router.delete("/accounts/{user_id}")
-def delete_account(
-    user_id: int,
-    request: Request,
-    session: Session = Depends(get_session),
-    admin: User = Depends(admin_user),
-) -> dict:
-    """删除账户：连同其持仓、挂单、流水一并清理。
-
-    保护规则：不能删除自己，也不能删除最后一个管理员（否则后台会没人能进）。
-    """
-    target = session.get(User, user_id)
-    if target is None:
-        raise HTTPException(404, detail={"code": "USER_NOT_FOUND", "message": "账户不存在"})
-    if target.id == admin.id:
-        raise HTTPException(400, detail={"code": "SELF_DELETE", "message": "不能删除当前登录的管理员账户"})
-    if target.role == Role.ADMIN:
-        admins = session.exec(select(func.count()).select_from(User).where(User.role == Role.ADMIN)).one()
-        if admins <= 1:
-            raise HTTPException(400, detail={"code": "LAST_ADMIN", "message": "至少保留一个管理员账户"})
-
-    for model in (Position, Order, Trade, CashFlow):
-        for row in session.exec(select(model).where(model.user_id == user_id)).all():
-            session.delete(row)
-    session.add(
-        AuditLog(
-            user_id=admin.id,
-            username=admin.username,
-            action="account_delete",
-            detail=f"{target.role.value}:{target.username}",
-            ip=request.client.host if request.client else "",
-        )
-    )
-    session.delete(target)
-    session.commit()
-    return {"ok": True}
-
-
-# ---------------------------------------------------------------------------
-# 风险画像：管理端按账户查看测评历史
-# ---------------------------------------------------------------------------
-
-
-@router.get("/risk/{user_id}")
-def risk_history(
-    user_id: int,
-    session: Session = Depends(get_session),
-    _: User = Depends(admin_user),
-) -> dict:
-    """查看某个账户的风险测评历史（新的在前）。
-
-    风评结果是适当性管理的凭证，后台必须能追溯到「谁、何时、答了什么、得几分」，
-    因此这里返回全部档案而不是只返回当前等级。
-    """
-    target = session.get(User, user_id)
-    if target is None:
-        raise HTTPException(404, detail={"code": "USER_NOT_FOUND", "message": "账户不存在"})
-    rows = session.exec(
-        select(RiskAssessment)
-        .where(RiskAssessment.user_id == user_id)
-        .order_by(RiskAssessment.assessed_at.desc())
-    ).all()
-    history = []
-    for r in rows:
-        try:
-            answers = json.loads(r.answers or "[]")
-        except Exception:
-            answers = []
-        history.append(
-            {
-                "id": r.id,
-                "version": r.version,
-                "score": r.score,
-                "level": r.level,
-                "answers": answers,
-                "source": r.source,
-                "assessed_at": r.assessed_at,
-            }
-        )
-    return {
-        "user_id": user_id,
-        "username": target.username,
-        "risk_level": target.risk_level,
-        "assessed": bool(history),
-        "history_count": len(history),
-        "history": history,
-    }
-
-
+# --------------------------------------------------------------------------- #
+# 风险偏好（只读汇总，无历史档案）
+# --------------------------------------------------------------------------- #
 @router.get("/risk-summary")
-def risk_summary(session: Session = Depends(get_session), _: User = Depends(admin_user)) -> dict:
-    """风险等级分布：多少账户未测评、多少是保守/稳健/进取。"""
-    rows = session.exec(select(User).where(User.role == Role.RETAIL)).all()
-    assessed_ids = {
-        r.user_id for r in session.exec(select(RiskAssessment)).all()
-    }
-    dist = {"unassessed": 0, "conservative": 0, "balanced": 0, "aggressive": 0}
-    for u in rows:
-        if u.id not in assessed_ids:
-            dist["unassessed"] += 1
-        elif u.risk_level <= 1:
-            dist["conservative"] += 1
-        elif u.risk_level == 2:
-            dist["balanced"] += 1
-        else:
-            dist["aggressive"] += 1
-    return {"total_retail": len(rows), **dist}
+def risk_summary(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    """风险偏好分布（零售 + 机构）。历史档案功能已移除，这里只给当前分布。"""
+    return _risk_distribution(session)

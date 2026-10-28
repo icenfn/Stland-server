@@ -1,4 +1,8 @@
-"""鉴权路由：注册、登录、刷新、登出、当前用户。"""
+"""鉴权路由：交易账户的注册、登录、刷新、登出、当前用户。
+
+管理员登录已迁到 `routers/admin.py` 的 `/api/admin/login`，两者彻底分开：
+交易账户读 `user` 表，管理员读 `admin` 表，令牌里的 role 也互斥。
+"""
 from __future__ import annotations
 
 import time
@@ -9,7 +13,7 @@ from sqlmodel import Session, select
 
 from ..config import settings
 from ..db import get_session
-from ..models import AccountStatus, AuditLog, RevokedToken, Role, User
+from ..models import AccountStatus, RevokedToken, Role, User
 from ..security import (
     TokenError,
     create_token,
@@ -47,7 +51,7 @@ class RegisterIn(BaseModel):
 
 
 class LoginIn(BaseModel):
-    username: str = Field(min_length=1, max_length=20)
+    username: str = Field(min_length=1, max_length=40)
     password: str = Field(min_length=1, max_length=64)
 
 
@@ -69,6 +73,8 @@ def public_user(user: User) -> dict:
         "realized_pnl": round(user.realized_pnl, 2),
         "credit_limit": round(user.credit_limit, 2),
         "risk_level": user.risk_level,
+        "risk_assessed": user.risk_assessed_at > 0,
+        "risk_assessed_at": user.risk_assessed_at,
         "created_at": user.created_at,
     }
 
@@ -78,8 +84,6 @@ def register(payload: RegisterIn, session: Session = Depends(get_session)) -> di
     exists = session.exec(select(User).where(User.username == payload.username)).first()
     if exists:
         raise HTTPException(409, detail={"code": "USERNAME_TAKEN", "message": "用户名已被占用"})
-    if payload.role == Role.ADMIN:
-        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN", "message": "管理端账户需由管理员创建"})
 
     user = User(
         username=payload.username,
@@ -97,9 +101,8 @@ def register(payload: RegisterIn, session: Session = Depends(get_session)) -> di
 
 
 @router.post("/login")
-def login(payload: LoginIn, request: Request, session: Session = Depends(get_session)) -> dict:
+def login(payload: LoginIn, session: Session = Depends(get_session)) -> dict:
     user = session.exec(select(User).where(User.username == payload.username.lower())).first()
-    ip = request.client.host if request.client else ""
 
     if user is None:
         raise HTTPException(401, detail={"code": "BAD_CREDENTIALS", "message": "用户名或口令错误"})
@@ -118,7 +121,6 @@ def login(payload: LoginIn, request: Request, session: Session = Depends(get_ses
             user.locked_until = now + 300
             user.fail_count = 0
         session.add(user)
-        session.add(AuditLog(user_id=user.id, username=user.username, action="login_failed", detail="口令错误", ip=ip))
         session.commit()
         raise HTTPException(401, detail={"code": "BAD_CREDENTIALS", "message": "用户名或口令错误"})
 
@@ -129,13 +131,10 @@ def login(payload: LoginIn, request: Request, session: Session = Depends(get_ses
     user.locked_until = 0.0
     user.last_login_at = now
     session.add(user)
-    session.add(AuditLog(user_id=user.id, username=user.username, action="login", detail="登录成功", ip=ip))
     session.commit()
     session.refresh(user)
 
-    refresh = create_token(
-        {"sub": str(user.id), "scope": "refresh"}, ttl=settings.refresh_token_ttl
-    )
+    refresh = create_token({"sub": str(user.id), "scope": "refresh"}, ttl=settings.refresh_token_ttl)
     return {"user": public_user(user), "token": issue_access_token(user), "refresh_token": refresh}
 
 
@@ -160,8 +159,7 @@ def logout(request: Request, session: Session = Depends(get_session), user: User
     if jti:
         if not session.exec(select(RevokedToken).where(RevokedToken.jti == jti)).first():
             session.add(RevokedToken(jti=jti, expire_at=float(payload.get("exp", 0))))
-    session.add(AuditLog(user_id=user.id, username=user.username, action="logout", detail="退出登录"))
-    session.commit()
+        session.commit()
     return {"ok": True}
 
 
