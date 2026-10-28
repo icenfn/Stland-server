@@ -38,7 +38,6 @@ def risk_payload(user: User) -> dict:
         "assessed": assessed,
         "level": user.risk_level if assessed else 0,
         "label": RISK_LEVEL_LABELS.get(user.risk_level if assessed else 0, "未测评"),
-        "score": user.risk_score if assessed else 0,
         "assessed_at": user.risk_assessed_at if assessed else 0.0,
     }
 
@@ -134,17 +133,18 @@ def flows(
 
 
 class RiskIn(BaseModel):
-    """风险偏好测评提交：客户端传原始答案与问卷版本，服务端复算分数。
+    """风险偏好测评提交：客户端传原始答案与问卷版本，服务端换算等级。
 
     为什么不让客户端直接提交等级：那等于「让被评人自己宣布结论」，既无法复核
-    也不一致。改为传 answers + version，服务端用同一份口径算分，客户端只负责呈现。
+    也不一致。答案只在本请求内用于换算等级，换算完即丢弃 —— 不落库、不返回总分。
     """
 
     version: int = Field(default=1, ge=1, le=99)
     answers: list[int] = Field(default_factory=list, max_length=32)
 
 
-# 评分口径（与客户端问卷一一对应）：每题选项分值
+# 评分口径（与客户端问卷一一对应）：每题选项分值。
+# 总分只是中间的换算量，对外不出现、不存储。
 RISK_OPTION_SCORES: tuple[tuple[int, ...], ...] = (
     (0, 2, 4, 6),
     (0, 2, 4, 6),
@@ -152,21 +152,15 @@ RISK_OPTION_SCORES: tuple[tuple[int, ...], ...] = (
     (0, 2, 4, 6),
     (0, 2, 4, 6),
 )
-RISK_MAX_SCORE = sum(max(row) for row in RISK_OPTION_SCORES)  # 30
+RISK_MAX_SCORE = sum(max(row) for row in RISK_OPTION_SCORES)
 
 
-def score_to_level(total: int) -> int:
-    """分档：<1/3 保守，中间稳健，>2/3 进取 —— 按满分比例切，避免满分变化后阈值失效。"""
-    third = RISK_MAX_SCORE / 3
-    if total < third:
-        return 1
-    if total < third * 2:
-        return 2
-    return 3
+def level_of_answers(answers: list[int]) -> int:
+    """把答案直接换算成等级（越界选项按 0 分处理，不报错）。
 
-
-def compute_risk(answers: list[int]) -> tuple[int, int]:
-    """按题目下标与选项下标复算总分与等级（越界选项按 0 分处理，不报错）。"""
+    按满分三等分切档：下三分之一保守、中三分之一稳健、上三分之一进取。
+    总分是函数内局部变量，调用方拿不到，也就无从写进数据库或接口返回。
+    """
     total = 0
     for qi, oi in enumerate(answers):
         if qi >= len(RISK_OPTION_SCORES):
@@ -174,7 +168,12 @@ def compute_risk(answers: list[int]) -> tuple[int, int]:
         row = RISK_OPTION_SCORES[qi]
         if 0 <= oi < len(row):
             total += row[oi]
-    return total, score_to_level(total)
+    third = RISK_MAX_SCORE / 3
+    if total < third:
+        return 1
+    if total < third * 2:
+        return 2
+    return 3
 
 
 @router.post("/risk", dependencies=[Depends(signed_request)])
@@ -188,11 +187,10 @@ def set_risk(
     写入 `risk_assessed_at` 是本轮修复「测评后重进仍显示开始测评」的关键：
     客户端判断是否已测评，只认这个时间戳，不依赖任何前端缓存或历史表。
     """
-    total, level = compute_risk(payload.answers)
+    level = level_of_answers(payload.answers)
     now = time.time()
 
     user.risk_level = level
-    user.risk_score = total
     user.risk_assessed_at = now
     user.updated_at = now
     session.add(user)

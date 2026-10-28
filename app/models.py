@@ -65,9 +65,9 @@ class User(SQLModel, table=True):
     字段、账务、撮合、结算流程完全一致，拆成两张表只会让交易链路到处 if/else。
     差异用一个可空语义的默认值 + ``role`` 表达即可。
 
-    风险偏好：``risk_level`` / ``risk_score`` / ``risk_assessed_at`` 三个字段
-    直接落在账户行上。不再建测评历史表 —— 业务只需要「当前偏好是什么、什么时候测的」，
-    历史档案属于合规留痕，与本产品要解决的问题无关。
+    风险偏好：只存 ``risk_level`` / ``risk_assessed_at`` 两个字段，直接落在账户行上。
+    不存总分、不存答题明细、不建测评历史表 —— 业务只需要「当前偏好是什么、
+    什么时候测的」，其余都是自己造出来的数据负担。
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -88,8 +88,9 @@ class User(SQLModel, table=True):
     credit_limit: float = Field(default=0.0)
 
     # 风险偏好（0 = 从未测评）
+    # 只存「等级 + 测评时间」：总分是问卷内部口径，对业务和用户都没有意义，
+    # 存下来反而容易被误解成「分数越高越好」的评分体系；答题明细一律不落库。
     risk_level: int = Field(default=0)              # 0 未测评 / 1 保守 / 2 稳健 / 3 进取
-    risk_score: int = Field(default=0)              # 最近一次测评总分
     risk_assessed_at: float = Field(default=0.0)    # 最近一次测评时间（0 表示未测评）
 
     fail_count: int = Field(default=0)          # 连续登录失败次数
@@ -176,6 +177,10 @@ class Stock(SQLModel, table=True):
     total_shares: float = Field(default=1e9)   # 总股本（股）
     float_shares: float = Field(default=5e8)   # 流通股本（股）
     is_st: bool = Field(default=False)
+    # 是否已下架。用「软删除 + 标记」而不是物理删除：种子注入按代码去重，
+    # 看到这一行就不会把运营下架的标的加回来 —— 这件事只需要标的自己的状态，
+    # 不需要任何事件/日志表来代记。
+    delisted: bool = Field(default=False, index=True)
 
     # 模拟器参数（研究结论落到参数上）
     init_price: float = Field(default=10.0)
@@ -284,15 +289,6 @@ class CashFlow(SQLModel, table=True):
     ref_no: str = Field(default="", max_length=32)
     remark: str = Field(default="", max_length=120)
     created_at: float = Field(default_factory=now_ts, index=True)
-
-
-class SystemEvent(SQLModel, table=True):
-    """系统级事件（开盘/收盘/启动/初始化），供管理端时间线使用。"""
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    kind: str = Field(max_length=24, index=True)
-    message: str = Field(default="", max_length=200)
-    created_at: float = Field(default_factory=now_ts)
 
 
 class RevokedToken(SQLModel, table=True):

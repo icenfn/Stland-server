@@ -183,7 +183,7 @@ td .empty,.empty{color:var(--text-3); text-align:center; padding:18px 0;}
     <button data-tab="risk">风险偏好</button>
     <button data-tab="config">系统配置</button>
     <button data-tab="data">数据初始化</button>
-    <button data-tab="ops">撮合与事件</button>
+    <button data-tab="ops">撮合质量</button>
   </div>
 
   <main>
@@ -362,7 +362,7 @@ td .empty,.empty{color:var(--text-3); text-align:center; padding:18px 0;}
       </div>
     </section>
 
-    <!-- 撮合与事件 -->
+    <!-- 撮合质量 -->
     <section class="page" id="page-ops">
       <div class="panel">
         <div class="row-between">
@@ -379,13 +379,6 @@ td .empty,.empty{color:var(--text-3); text-align:center; padding:18px 0;}
         <table>
           <thead><tr><th>代码</th><th>名称</th><th>成交笔数</th><th>成交额</th><th>成交量</th></tr></thead>
           <tbody id="matchBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
-        </table>
-      </div>
-      <div class="panel">
-        <h3>系统事件 <span class="n">替代原审计日志：只记发生了什么，不记谁对谁做了什么</span></h3>
-        <table>
-          <thead><tr><th>时间</th><th>类型</th><th>说明</th></tr></thead>
-          <tbody id="eventBody"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -1035,7 +1028,7 @@ $('seedBtn').addEventListener('click', async (e) => {
 });
 
 /* ================================================================== *
- * 撮合与系统事件
+ * 撮合质量
  * ================================================================== */
 async function loadOps() {
   try {
@@ -1056,19 +1049,6 @@ async function loadOps() {
       : '<tr><td colspan="5" class="empty">暂无成交</td></tr>';
   } catch (e) {
     $('matchBody').innerHTML = `<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`;
-  }
-
-  // 系统事件（原审计日志已移除，这里只记「发生了什么」）
-  try {
-    const ev = await api('/api/admin/events');
-    const rows = ev.items || [];
-    $('eventBody').innerHTML = rows.length ? rows.map((l) => `
-      <tr><td class="muted" style="white-space:nowrap">${dt(l.created_at)}</td>
-      <td><span class="pill">${esc(l.kind)}</span></td>
-      <td style="white-space:normal">${esc(l.message)}</td></tr>`).join('')
-      : '<tr><td colspan="3" class="empty">暂无事件</td></tr>';
-  } catch (e) {
-    $('eventBody').innerHTML = `<tr><td colspan="3" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
 $('refreshOps').addEventListener('click', loadOps);

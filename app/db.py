@@ -36,8 +36,8 @@ if settings.db_url.startswith("sqlite"):
         cur.close()
 
 
-# 已废弃的表：审计日志、风险测评档案（本轮删除相关功能）
-_LEGACY_TABLES = ("auditlog", "riskassessment")
+# 已废弃的表：审计日志、风险测评档案、系统事件（功能已全部删除）
+_LEGACY_TABLES = ("auditlog", "riskassessment", "systemevent")
 
 
 def _purge_legacy() -> None:

@@ -3,9 +3,9 @@
 本版三处结构性变化：
 1. **管理员独立登录**：`/api/admin/login` 只查 `admin` 表，签发的令牌 role 固定为
    `admin`；交易账户的令牌在 `admin_user` 里会被直接拒绝。两条链路彻底隔离。
-2. **删除审计日志**：`AuditLog` 表与 `/audit` 接口、所有写入点一并移除。
-   运营动作的痕迹改由 `SystemEvent` 承担 —— 只记「发生了什么」，
-   不再记录「谁在什么 IP 对谁做了什么」这种合规留痕。
+2. **不做任何记录型留痕**：审计日志（`AuditLog`）与系统事件（`SystemEvent`）两张表、
+   对应接口与全部写入点都已删除。运营动作不留痕是本产品的明确取舍 —— 模拟盘由
+   单人/小团队运营，留痕表只会持续吃存储，并在后台堆出一份没人看的列表。
 3. **账户拆两张表展示**：交易账户（零售 + 机构，同一张 `user` 表按 role 过滤）
    与管理员（独立的 `admin` 表）分开返回，不再混在一个列表里靠前端过滤。
 """
@@ -33,7 +33,6 @@ from ..models import (
     Position,
     Role,
     Stock,
-    SystemEvent,
     Trade,
     User,
     WatchGroup,
@@ -209,25 +208,13 @@ def put_settings(
     """修改运行期配置：校验通过后立即写到内存 settings，下一次请求即生效。"""
     if not payload.values:
         raise HTTPException(400, detail={"code": "EMPTY", "message": "没有需要修改的配置"})
-    result = runtime_config.update(session, payload.values, operator=admin.username)
-    if result["updated"]:
-        session.add(
-            SystemEvent(
-                kind="config_update",
-                message=f"管理员 {admin.username} 修改配置：{', '.join(result['updated'])}",
-            )
-        )
-        session.commit()
-    return result
+    return runtime_config.update(session, payload.values, operator=admin.username)
 
 
 @router.post("/settings/reset")
 def reset_settings(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
     """恢复全部配置为代码默认值。"""
-    result = runtime_config.reset_defaults(session, operator=admin.username)
-    session.add(SystemEvent(kind="config_reset", message=f"管理员 {admin.username} 恢复默认配置"))
-    session.commit()
-    return result
+    return runtime_config.reset_defaults(session, operator=admin.username)
 
 
 # --------------------------------------------------------------------------- #
@@ -322,7 +309,6 @@ def create_account(
     session.refresh(user)
     # 新账户落一个默认自选分组，客户端首屏不必处理"无分组"分支
     session.add(WatchGroup(user_id=user.id or 0, name="默认分组", sort=0))
-    session.add(SystemEvent(kind="account_create", message=f"{payload.role}:{payload.username} 由管理员创建"))
     session.commit()
     return {"ok": True, "id": user.id, "username": user.username, "role": user.role.value}
 
@@ -345,7 +331,6 @@ def delete_account(
         for row in session.exec(select(model).where(model.user_id == user_id)).all():
             session.delete(row)
     session.delete(target)
-    session.add(SystemEvent(kind="account_delete", message=f"{target.role.value}:{target.username} 已被删除"))
     session.commit()
     return {"ok": True}
 
@@ -368,9 +353,6 @@ def update_account_status(
     target.status = payload.status
     target.updated_at = time.time()
     session.add(target)
-    session.add(
-        SystemEvent(kind="account_status", message=f"{target.username} -> {payload.status.value}")
-    )
     session.commit()
     return {"ok": True, "status": target.status.value}
 
@@ -445,7 +427,6 @@ def create_admin(
         is_active=True,
     )
     session.add(row)
-    session.add(SystemEvent(kind="admin_create", message=f"新增管理员 {username}"))
     session.commit()
     session.refresh(row)
     return {"ok": True, "admin": admin_public(row)}
@@ -467,7 +448,6 @@ def delete_admin(
     if total <= 1:
         raise HTTPException(400, detail={"code": "LAST_ADMIN", "message": "至少保留一个管理员"})
     session.delete(target)
-    session.add(SystemEvent(kind="admin_delete", message=f"管理员 {target.username} 被删除"))
     session.commit()
     return {"ok": True}
 
@@ -589,11 +569,16 @@ def create_stock(
     session: Session = Depends(get_session),
     admin: Admin = Depends(admin_user),
 ) -> dict:
-    if session.get(Stock, payload.code) is not None:
+    # 下架的标的是软删除：行还在库里，只是 `delisted=True`。
+    # 因此「新增同代码」要分两种情况 —— 已下架的视为复活（覆盖参数、清标记），
+    # 只有仍在架上的才算真重复。否则下架后就永远加不回来，运营动作不可逆。
+    existing = session.get(Stock, payload.code)
+    if existing is not None and not existing.delisted:
         raise HTTPException(400, detail={"code": "DUP_CODE", "message": f"标的 {payload.code} 已存在"})
-    stock = _apply(Stock(code=payload.code, tick_size=0.01, lot_size=100), payload)
+
+    stock = _apply(existing or Stock(code=payload.code, tick_size=0.01, lot_size=100), payload)
+    stock.delisted = False
     session.add(stock)
-    session.add(SystemEvent(kind="stock_create", message=f"{payload.code} {payload.name} 由管理员新增"))
     session.commit()
     _register(stock)
     return {"ok": True, "code": stock.code}
@@ -613,7 +598,6 @@ def update_stock(
         raise HTTPException(400, detail={"code": "CODE_IMMUTABLE", "message": "代码不可修改，如需换码请删除后新增"})
     _apply(stock, payload)
     session.add(stock)
-    session.add(SystemEvent(kind="stock_update", message=f"{code} {payload.name} 参数已更新"))
     session.commit()
     _register(stock)
     return {"ok": True, "code": code}
@@ -634,10 +618,10 @@ def delete_stock(
             400,
             detail={"code": "STOCK_HELD", "message": f"仍有 {len(held)} 个账户持有该标的，请先处理持仓"},
         )
-    session.delete(stock)
-    # 记一条事件，bootstrap 看到它就不会把该种子标的加回来
-    session.add(SystemEvent(kind="stock_removed", message=f"{code} 已下线"))
-    session.add(SystemEvent(kind="stock_delete", message=f"{code} {stock.name} 被删除"))
+    # 软下架而不是物理删除：行留着，`delisted` 标记本身就是「运营不要这支」的事实。
+    # bootstrap 按代码去重，看到这一行就不会再把种子标的加回来。
+    stock.delisted = True
+    session.add(stock)
     session.commit()
     market_engine.unregister(code)
     return {"ok": True}
@@ -666,17 +650,6 @@ def seed_data(
         include_users=payload.users,
         include_history=payload.history,
     )
-    session.add(
-        SystemEvent(
-            kind="seed",
-            message=(
-                f"管理员 {admin.username} 注入数据：stocks={payload.stocks},users={payload.users},"
-                f"history={payload.history} → +{result['stocks_added']}/+{result['users_added']}/"
-                f"+{result['daily_bars_added']}"
-            ),
-        )
-    )
-    session.commit()
     return {"ok": True, **result}
 
 
@@ -742,23 +715,10 @@ def leaderboard(session: Session = Depends(get_session), admin: Admin = Depends(
     return {"items": items}
 
 
-@router.get("/events")
-def events(
-    limit: int = Query(default=80, ge=1, le=300),
-    session: Session = Depends(get_session),
-    admin: Admin = Depends(admin_user),
-) -> dict:
-    """系统事件时间线（替代原来的审计日志）。"""
-    rows = session.exec(select(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(limit)).all()
-    return {"items": [{"kind": r.kind, "message": r.message, "created_at": r.created_at} for r in rows]}
-
-
 @router.post("/settle")
 def settle(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
     """执行日终结转（T+1 解锁）。"""
     settle_all(session)
-    session.add(SystemEvent(kind="settle", message=f"管理员 {admin.username} 触发日终结转"))
-    session.commit()
     return {"ok": True, "at": int(time.time())}
 
 

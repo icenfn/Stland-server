@@ -20,7 +20,7 @@ from .db import engine, init_db, session_scope
 from .engine.market import market_engine
 from .engine.seed import LIMIT_BY_BOARD, SEED_STOCKS, SEED_USERS
 from .engine.session import current_session
-from .models import Admin, DailyBar, Role, Stock, SystemEvent, User
+from .models import Admin, DailyBar, Role, Stock, User
 from .security import hash_password
 from .services.trading import settle_all
 
@@ -33,21 +33,13 @@ def ensure_stocks(session: Session) -> int:
     「默认值」而不是「真值」：
       · 库里没有该代码 → 按种子插入；
       · 库里已有 → 原样保留（名字、参数、上下架状态都不动）；
-      · 运营删除过的代码 → 记在 SystemEvent 里，不自动复活。
+      · 运营下架过的代码 → 行上 `delisted=True`，不自动复活。
     """
     existing = {s.code for s in session.exec(select(Stock)).all()}
 
-    removed_codes: set[str] = set()
-    try:
-        for ev in session.exec(select(SystemEvent).where(SystemEvent.kind == "stock_removed")).all():
-            if ev.message:
-                removed_codes.add(ev.message.strip().split(" ")[0])
-    except Exception:
-        removed_codes = set()
-
     added = 0
     for seed in SEED_STOCKS:
-        if seed.code in existing or seed.code in removed_codes:
+        if seed.code in existing:
             continue
         pct = LIMIT_BY_BOARD.get(seed.board, 0.10)
         session.add(
@@ -96,7 +88,6 @@ def ensure_users(session: Session) -> int:
                 credit_limit=seed.credit_limit,
                 risk_level=seed.risk_level,
                 # 种子账户若自带等级，视为「已完成测评」，否则客户端会一直提示去测评
-                risk_score=0,
                 risk_assessed_at=now if seed.risk_level > 0 else 0.0,
             )
         )
@@ -156,12 +147,6 @@ def ensure_admin(session: Session) -> bool:
         is_active=True,
     )
     session.add(admin)
-    session.add(
-        SystemEvent(
-            kind="bootstrap_admin",
-            message="首次启动：创建引导管理员，用于进入后台并手动初始化数据",
-        )
-    )
     session.commit()
     logger.warning("已创建引导管理员 %s（请立即登录后台修改密码）", admin.username)
     return True
@@ -178,9 +163,6 @@ def bootstrap() -> dict:
         stocks = len(session.exec(select(Stock)).all())
         users = len(session.exec(select(User)).all())
         admins = len(session.exec(select(Admin)).all())
-        session.add(
-            SystemEvent(kind="boot", message=f"系统启动：{stocks} 支标的、{users} 个交易账户、{admins} 个管理员")
-        )
     return {"stocks_total": stocks, "users_total": users, "admins_total": admins, "seeded": False}
 
 
@@ -196,16 +178,6 @@ def init_seed_data(include_stocks: bool = True, include_users: bool = True, incl
     with session_scope() as session:
         if include_history:
             result["daily_bars_added"] = ensure_history(session)
-        session.add(
-            SystemEvent(
-                kind="seed",
-                message=(
-                    "手动初始化数据："
-                    f"标的 +{result['stocks_added']}、账户 +{result['users_added']}、"
-                    f"日线 +{result['daily_bars_added']}"
-                ),
-            )
-        )
     return result
 
 
@@ -225,14 +197,8 @@ def _loop() -> None:
                     last_date = today
                     with session_scope() as session:
                         settle_all(session)
-                        session.add(SystemEvent(kind="new_day", message=f"{today} 开盘，T+1 持仓已解锁"))
-        except Exception as exc:  # 后台线程不可因单次异常退出
+        except Exception:  # 后台线程不可因单次异常退出
             logger.exception("行情循环异常")
-            try:
-                with session_scope() as session:
-                    session.add(SystemEvent(kind="error", message=f"行情循环异常：{exc}"[:190]))
-            except Exception:
-                pass
         time.sleep(max(0.2, settings.tick_seconds))
 
 
