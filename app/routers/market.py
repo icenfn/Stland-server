@@ -15,13 +15,13 @@ from ..engine import index as index_engine
 from ..engine.market import market_engine
 from ..engine.session import current_session
 from ..models import DailyBar, Stock
-from ..services.deps import signed_request
+from ..services.deps import optional_signature, signed_request
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 
 
 @router.get("/overview")
-def overview(_: None = Depends(signed_request), session: Session = Depends(get_session)) -> dict:
+def overview(_: None = Depends(optional_signature), session: Session = Depends(get_session)) -> dict:
     """首页聚合：指数、涨跌分布、榜单、交易时段。"""
     quotes = list(market_engine.quotes().values())
     stats = market_engine.stats()

@@ -84,6 +84,43 @@ def create_group(
     return {"ok": True, "group": _group_view(group, 0), "existed": False}
 
 
+@router.patch("/groups/{group_id}", dependencies=[Depends(signed_request)])
+def rename_group(
+    group_id: int,
+    payload: GroupIn,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> dict:
+    """重命名分组。与原组同名视为无操作，与其他分组重名则拒绝。"""
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, detail={"code": "BAD_NAME", "message": "分组名称不能为空"})
+
+    group = session.get(WatchGroup, group_id)
+    if group is None or group.user_id != user.id:
+        raise HTTPException(404, detail={"code": "GROUP_NOT_FOUND", "message": "分组不存在"})
+
+    if group.name == name:
+        return {"ok": True, "group": _group_view(group, 0), "changed": False}
+
+    clash = session.exec(
+        select(WatchGroup).where(
+            WatchGroup.user_id == user.id, WatchGroup.name == name, WatchGroup.id != group_id
+        )
+    ).first()
+    if clash is not None:
+        raise HTTPException(400, detail={"code": "NAME_TAKEN", "message": "已存在同名分组"})
+
+    group.name = name
+    session.add(group)
+    session.commit()
+    session.refresh(group)
+    count = len(
+        session.exec(select(WatchItem).where(WatchItem.group_id == group.id)).all()
+    )
+    return {"ok": True, "group": _group_view(group, count), "changed": True}
+
+
 @router.delete("/groups/{group_id}", dependencies=[Depends(signed_request)])
 def delete_group(
     group_id: int,

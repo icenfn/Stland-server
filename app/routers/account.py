@@ -51,10 +51,16 @@ def summary(session: Session = Depends(get_session), user: User = Depends(curren
 
     # 当日盈亏：持仓浮动（最新价对昨收）
     day_pnl = 0.0
+    # 浮动盈亏：持仓成本对最新价，与「已实现」是两件不同的事，必须分开给
+    floating_pnl = 0.0
+    floating_cost = 0.0
     for p in positions:
         q = market_engine.quote(p.code)
         if q:
-            day_pnl += (float(q["price"]) - float(q["prev_close"])) * p.quantity
+            last = float(q["price"])
+            day_pnl += (last - float(q["prev_close"])) * p.quantity
+            floating_pnl += (last - p.avg_cost) * p.quantity
+            floating_cost += p.avg_cost * p.quantity
 
     return {
         "user": {
@@ -73,6 +79,8 @@ def summary(session: Session = Depends(get_session), user: User = Depends(curren
             "realized_pnl": round(user.realized_pnl, 2),
             "fee_paid": round(user.fee_paid, 2),
             "day_pnl": round(day_pnl, 2),
+            "floating_pnl": round(floating_pnl, 2),
+            "floating_pct": round(floating_pnl / floating_cost * 100, 2) if floating_cost > 0 else 0.0,
         },
         "risk": risk_payload(user),
     }

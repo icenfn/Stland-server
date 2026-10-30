@@ -69,6 +69,7 @@ class SecurityState:
     cur_minute: MinuteBar | None = None
     cond_vol: float = 0.0           # GARCH 条件方差
     day_volume_base: float = 0.0
+    day_progress: float = 0.0       # 当日已走过的交易进度（0~1），量比要用
 
     # ---- 派生字段 ----
     @property
@@ -86,6 +87,24 @@ class SecurityState:
         if self.float_shares <= 0:
             return 0.0
         return round(self.volume / self.float_shares * 100, 4)
+
+    @property
+    def volume_ratio(self) -> float:
+        """量比 = 当前每分钟均量 ÷ 过去 5 日每分钟均量。
+
+        分子用「今日累计成交量 / 已交易分钟数」，分母用 `day_volume_base`
+        （引擎里就是这只票的日均成交量基准）除以 240 分钟。
+        开盘头几分钟分母极小，量比会异常放大，所以已交易分钟数至少按 1 分钟算，
+        这也符合真实软件开盘量比普遍偏大的表现，但不会出现几十倍的假值。
+        """
+        if self.day_volume_base <= 0:
+            return 0.0
+        elapsed = max(self.day_progress * 240.0, 1.0)
+        avg_per_min = self.volume / elapsed
+        base_per_min = self.day_volume_base / 240.0
+        if base_per_min <= 0:
+            return 0.0
+        return round(avg_per_min / base_per_min, 3)
 
     @property
     def amplitude(self) -> float:
@@ -108,6 +127,7 @@ class SecurityState:
             "change_pct": self.change_pct,
             "amplitude": self.amplitude,
             "turnover_rate": self.turnover_rate,
+            "volume_ratio": self.volume_ratio,
             "limit_up": self.limit_up,
             "limit_down": self.limit_down,
             "bid": self.bids[0].price if self.bids else 0.0,
@@ -303,6 +323,7 @@ class MarketEngine:
 
                 # ---- 量价关系 + U 型日内曲线 ----
                 progress = (self._tick_count % 14400) / 14400
+                st.day_progress = progress
                 u_shape = 1.0 + 1.6 * (math.exp(-((progress - 0.02) ** 2) / 0.004) + math.exp(-((0.98 - progress) ** 2) / 0.004))
                 intensity = (0.6 + 12 * abs(ret) * 40) * st.liquidity * u_shape
                 traded = int(max(100, st.day_volume_base * intensity / math.sqrt(14400 / max(settings.tick_seconds, 0.5))))

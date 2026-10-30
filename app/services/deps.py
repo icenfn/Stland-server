@@ -127,6 +127,30 @@ async def signed_request(
         )
 
 
+async def optional_signature(
+    request: Request,
+    x_stland_ts: str = Header(default=""),
+    x_stland_nonce: str = Header(default=""),
+    x_stland_sign: str = Header(default=""),
+    x_stland_user: str = Header(default=""),
+) -> None:
+    """签名「可带则校验」：用于登录前就要用的公开行情接口。
+
+    为什么需要它：行情与个股查询本身不含账户数据，不该因为「没登录 / 没算签名」
+    就被挡在门外 —— 否则新用户打开 App 第一屏就是一片空白，连行情都看不到。
+    但携带了签名的请求仍然要验签，避免公开接口被当成绕过签名的入口。
+    """
+    if not x_stland_sign:
+        return
+    await signed_request(
+        request=request,
+        x_stland_ts=x_stland_ts,
+        x_stland_nonce=x_stland_nonce,
+        x_stland_sign=x_stland_sign,
+        x_stland_user=x_stland_user,
+    )
+
+
 def require_role(*roles: str):
     """角色守卫：零售 / 机构共用一套接口，按角色放开能力。"""
 

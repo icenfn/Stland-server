@@ -22,7 +22,7 @@ from .engine.seed import LIMIT_BY_BOARD, SEED_STOCKS, SEED_USERS
 from .engine.session import current_session
 from .models import Admin, DailyBar, Role, Stock, User
 from .security import hash_password
-from .services.trading import settle_all
+from .services.trading import rematch_pending, settle_all
 
 logger = logging.getLogger("stland.bootstrap")
 
@@ -229,6 +229,10 @@ def _loop() -> None:
         try:
             if settings.engine_enabled:
                 market_engine.tick()
+                # 行情推进后再撮合一次挂单：限价单只有在价格走到委托价时才该成交，
+                # 下单瞬间撮合不到并不代表它永远不成交。
+                with session_scope() as session:
+                    rematch_pending(session)
                 today = current_session().trade_date
                 if today != last_date:
                     last_date = today

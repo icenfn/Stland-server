@@ -224,6 +224,9 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
     total_tax = 0.0
     total_transfer = 0.0
     realized = 0.0
+    # 再撮合时订单可能已有部分成交，成交均价必须按「累计」加权，而不是只算这一批
+    prev_filled = order.filled_quantity
+    prev_avg = order.avg_fill_price or 0.0
     pos = _get_position(session, user.id or 0, stock.code)
 
     for fill in fills:
@@ -283,11 +286,18 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             )
         )
 
-    order.filled_quantity += filled_qty
-    order.avg_fill_price = vwap([f for f in fills])
-    order.fee = round_money(total_fee + total_tax + total_transfer)
+    batch_avg = vwap([f for f in fills])
+    total_filled = prev_filled + filled_qty
+    order.avg_fill_price = (
+        round((prev_avg * prev_filled + batch_avg * filled_qty) / total_filled, 4)
+        if total_filled
+        else batch_avg
+    )
+    order.filled_quantity = total_filled
+    order.fee = round_money((order.fee or 0.0) + total_fee + total_tax + total_transfer)
     order.updated_at = time.time()
 
+    keep_frozen = 0.0
     if order.filled_quantity >= order.quantity:
         order.status = OrderStatus.FILLED
     else:
@@ -296,9 +306,14 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             order.reject_reason = "市价委托剩余部分自动撤销"
             order.quantity = order.filled_quantity
             order.status = OrderStatus.FILLED
+        else:
+            # 限价单还有剩余：这部分继续挂着，冻结资金必须留在冻结池里
+            remain_qty = order.quantity - order.filled_quantity
+            remain_amt = order.price * remain_qty
+            keep_frozen = round_money(remain_amt + calc_fee(remain_amt, "buy").total)
 
     session.add(order)
-    _release_freeze(session, user, order, stock, total_amount + order.fee)
+    _release_freeze(session, user, order, stock, total_amount + total_fee + total_tax + total_transfer, keep_frozen)
 
     user.realized_pnl = round_money(user.realized_pnl + realized)
     user.fee_paid = round_money(user.fee_paid + order.fee)
@@ -306,27 +321,94 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
     session.add(user)
 
 
-def _release_freeze(session: Session, user: User, order: Order, stock: Stock, spent: float) -> None:
-    """成交后结算冻结账户：已花费部分核销出冻结池，未花费部分退回可用资金。"""
+def _release_freeze(
+    session: Session,
+    user: User,
+    order: Order,
+    stock: Stock,
+    spent: float,
+    keep_frozen: float = 0.0,
+) -> None:
+    """成交后结算冻结账户：已花费部分核销出冻结池，未花费部分退回可用资金。
+
+    `keep_frozen` 是「这笔委托还要继续挂着，必须留在冻结池里的钱」。
+    部分成交时如果不保留它，剩余未成交部分就等于凭空多出可用资金 ——
+    用户在下一次再撮合之前把这笔钱花掉，成交时就会造成资金透支。
+    """
     if order.side != OrderSide.BUY or order.frozen_amount <= 0:
         return
     frozen = order.frozen_amount
     consumed = min(frozen, max(0.0, spent))
-    remaining = round_money(frozen - consumed)
+    keep = round_money(min(frozen - consumed, max(0.0, keep_frozen)))
+    refund = round_money(frozen - consumed - keep)
 
     # 1) 已花费部分从冻结池核销（这部分资金已转化为持仓，不再属于任何资金池）
     user.frozen_cash = round_money(max(0.0, user.frozen_cash - consumed))
 
-    # 2) 未花费的差额退回可用资金
-    if remaining > 0:
+    # 2) 未花费且不再需要的差额退回可用资金
+    if refund > 0:
         before = user.cash
-        user.cash = round_money(user.cash + remaining)
-        user.frozen_cash = round_money(max(0.0, user.frozen_cash - remaining))
-        _add_flow(session, user, "unfreeze", remaining, before, order.order_no, "成交后退回冻结资金")
+        user.cash = round_money(user.cash + refund)
+        user.frozen_cash = round_money(max(0.0, user.frozen_cash - refund))
+        _add_flow(session, user, "unfreeze", refund, before, order.order_no, "成交后退回冻结资金")
 
-    order.frozen_amount = 0.0
+    # 3) 继续挂单的部分保持冻结，供后续再撮合使用
+    order.frozen_amount = keep
     user.updated_at = time.time()
     session.add(user)
+
+
+def rematch_pending(session: Session) -> int:
+    """把还挂着的限价委托重新撮合一次。
+
+    为什么必须有这一步
+    -----------------
+    `place_order` 只在「下单那一瞬间」撮合。限价单如果当时价格没到，
+    就会一直停在 pending —— 之后行情真的走到委托价，也没有任何人去重新撮合它，
+    用户看到的就是「股价已经到我委托的价了，但就是不成交」。
+
+    这里由后台行情循环在每个 tick 之后调用：把 pending / partial 的限价单
+    全部按最新盘口再过一遍，价格够就成交，不够就原样留着。
+    只处理限价单：市价单在下单时未成交的部分已经按规则撤销。
+    """
+    if not current_session().can_trade:
+        return 0
+
+    orders = session.exec(
+        select(Order).where(
+            Order.status.in_([OrderStatus.PENDING, OrderStatus.PARTIAL]),
+            Order.order_type == OrderType.LIMIT,
+        )
+    ).all()
+    if not orders:
+        return 0
+
+    filled_orders = 0
+    for order in orders:
+        try:
+            quote = market_engine.quote(order.code)
+            stock = session.get(Stock, order.code)
+            user = session.get(User, order.user_id)
+            if quote is None or stock is None or user is None:
+                continue
+
+            last_price = float(quote["price"])
+            # 涨跌停时无法成交，跳过即可（不要动冻结，避免资金来回搬）
+            if order.side == OrderSide.BUY and last_price >= stock.limit_up - 1e-9:
+                continue
+            if order.side == OrderSide.SELL and last_price <= stock.limit_down + 1e-9:
+                continue
+
+            before = order.filled_quantity
+            _match_order(session, user, order, stock, quote)
+            session.commit()
+            if order.filled_quantity > before:
+                filled_orders += 1
+        except Exception:  # 单笔异常不能拖垮整个再撮合批次
+            session.rollback()
+            continue
+
+    return filled_orders
 
 
 def cancel_order(session: Session, user: User, order_id: int) -> Order:
