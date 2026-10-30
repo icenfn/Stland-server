@@ -21,7 +21,7 @@ from sqlmodel import Session, select
 
 from ..db import get_session
 from ..engine.market import market_engine
-from ..models import CashFlow, Position, Stock, Trade, User
+from ..models import CashFlow, Position, Stock, Trade, User, OrderSide
 from ..services.deps import current_user, signed_request
 from ..services.trading import settle_positions
 
@@ -49,16 +49,44 @@ def summary(session: Session = Depends(get_session), user: User = Depends(curren
     session.refresh(user)
     positions = session.exec(select(Position).where(Position.user_id == user.id)).all()
 
-    # 当日盈亏：持仓浮动（最新价对昨收）
+    # 当日盈亏：昨仓按「最新价对昨收」，今仓按「最新价对成交价」。
+    # 只按昨收算会把今天刚买入的股票也算进隔夜涨跌 —— 早上买入当天就显示一笔
+    # 并不存在的盈亏，用户对不上账。今天买的这部分基准应该是他的成交价。
     day_pnl = 0.0
     # 浮动盈亏：持仓成本对最新价，与「已实现」是两件不同的事，必须分开给
     floating_pnl = 0.0
     floating_cost = 0.0
+
+    # 今日买入的股数与成交金额（按代码汇总），用来把持仓切成「昨仓 + 今仓」
+    day_start = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+    today_buy: dict[str, list[float]] = {}
+    for t in session.exec(
+        select(Trade).where(
+            Trade.user_id == user.id,
+            Trade.side == OrderSide.buy,
+            Trade.created_at >= day_start,
+        )
+    ).all():
+        agg = today_buy.setdefault(t.code, [0.0, 0.0])  # [股数, 金额]
+        agg[0] += t.quantity
+        agg[1] += t.amount
+
     for p in positions:
         q = market_engine.quote(p.code)
         if q:
             last = float(q["price"])
-            day_pnl += (last - float(q["prev_close"])) * p.quantity
+            prev_close = float(q["prev_close"])
+
+            bought_qty, bought_amount = today_buy.get(p.code, [0.0, 0.0])
+            # 今日成交量不会超过当前持仓（卖出会把股数抵掉），保险起见夹一下
+            today_qty = min(bought_qty, float(p.quantity))
+            yesterday_qty = float(p.quantity) - today_qty
+
+            day_pnl += (last - prev_close) * yesterday_qty
+            if today_qty > 0 and bought_qty > 0:
+                today_avg = bought_amount / bought_qty
+                day_pnl += (last - today_avg) * today_qty
+
             floating_pnl += (last - p.avg_cost) * p.quantity
             floating_cost += p.avg_cost * p.quantity
 
