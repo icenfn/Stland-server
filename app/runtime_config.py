@@ -45,6 +45,9 @@ class Spec:
     choices: tuple[str, ...] = ()
     unit: str = ""
     note: str = ""
+    # 选项的展示名（value -> 中文标签）。为空时后台直接显示 value，
+    # 交易模式这种「存 a_share、显示 A股」的项必须给标签，否则运营看不懂下拉框
+    choice_labels: tuple[tuple[str, str], ...] = ()
 
     def coerce(self, raw: Any) -> Any:
         """把前端传来的字符串/数字规范成目标类型，越界抛 ValueError。"""
@@ -113,9 +116,25 @@ RUNTIME_SPECS: dict[str, Spec] = {
         "tick_seconds", "行情推进间隔", "float", 1.0,
         minimum=0.2, maximum=60.0, unit="秒", note="越小行情跳动越快，CPU 占用也越高",
     ),
-    "session_mode": Spec(
-        "session_mode", "交易时段模式", "choice", "always",
-        choices=("always", "real"), note="always=全天连续竞价；real=严格按 A 股时段",
+    "trade_mode": Spec(
+        "trade_mode", "交易模式", "choice", "a_share",
+        choices=("a_share", "us", "continuous"),
+        choice_labels=(
+            ("a_share", "A股"),
+            ("us", "美股"),
+            ("continuous", "连续竞价"),
+        ),
+        note="A股=9:30-11:30/13:00-15:00 连续竞价（含开盘/收盘集合竞价）；美股=美东时段（含盘前盘后）；连续竞价=24小时不间断",
+    ),
+    "market_volatility": Spec(
+        "market_volatility", "市场波动率系数", "float", 1.0,
+        minimum=0.1, maximum=5.0,
+        note="1.0 为基准；调大行情更活跃，调小更平稳（影响模拟引擎随机游走幅度）",
+    ),
+    "market_drift": Spec(
+        "market_drift", "市场漂移系数", "float", 1.0,
+        minimum=-3.0, maximum=3.0,
+        note=">0 长期偏多，<0 长期偏空；0 表示无系统性方向",
     ),
     "engine_enabled": Spec(
         "engine_enabled", "行情引擎开关", "bool", True, note="关闭后行情冻结，便于排查问题",
@@ -182,6 +201,7 @@ def snapshot() -> list[dict]:
                 "min": spec.minimum,
                 "max": spec.maximum,
                 "choices": list(spec.choices),
+                "choice_labels": [{"value": v, "label": t} for v, t in spec.choice_labels],
                 "unit": spec.unit,
                 "note": spec.note,
             }

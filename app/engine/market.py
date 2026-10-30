@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 from ..config import settings
 from .book import Level, build_levels, clip, snap
-from .session import trading_days
+from .session import current_session, trading_days
 
 YEAR_SECONDS = 252 * 4 * 3600  # 一个"交易日"按 4 小时计
 
@@ -41,6 +41,10 @@ class MinuteBar:
     close: float
     volume: int
     amount: float
+    # 该柱子所属时段：pre / auction / continuous / lunch / post / closed
+    # 客户端据此把盘前、集合竞价、盘后单独着色，避免「一根连续的红绿柱里混了
+    # 三段时间」这种对不上盘口的情况。
+    segment: str = "continuous"
 
 
 @dataclass
@@ -164,6 +168,10 @@ class MarketEngine:
         self._tick_count = 0
         self._day_key: str = ""
         self._last_tick_ts: float = 0.0
+        # 当前 tick 所属时段（pre / auction / continuous / lunch / post / closed）
+        # 与最近一次交易时钟快照，供 K 线与状态接口复用，避免重复计算
+        self._segment: str = "continuous"
+        self._session = None
         self.ready = False
 
     # ------------------------------------------------------------------ #
@@ -288,13 +296,28 @@ class MarketEngine:
     # 单个 tick
     # ------------------------------------------------------------------ #
     def tick(self) -> dict[str, dict]:
-        """推进一个时间步，返回最新行情快照表。"""
+        """推进一个时间步，返回最新行情快照表。
+
+        交易模式约束：只有当前时段允许连续撮合（`is_open`）时才推进价格。
+        集合竞价、午休、收盘后保持价格不变 —— 否则 K 线在休市时段还会继续长，
+        和真实行情对不上，用户也会疑惑「收盘了怎么还在动」。
+        引擎关闭（`engine_enabled=False`）时同样冻结，便于运营排查问题。
+        """
         with self._lock:
             now = time.time()
             if now - self._last_tick_ts < settings.tick_seconds * 0.5:
                 return {c: s.quote() for c, s in self._states.items()}
             self._last_tick_ts = now
+
+            # 交易模式门禁：休市/集合竞价期间只回报最新快照，不推进
+            session = current_session(now)
+            self._session = session
+            if not session.is_open:
+                self.ready = self.ready or bool(self._states)
+                return {c: s.quote() for c, s in self._states.items()}
+
             self._tick_count += 1
+            self._segment = session.segment
             dt = settings.tick_seconds / YEAR_SECONDS
             sqdt = math.sqrt(dt)
             rng = self._rng
@@ -336,12 +359,15 @@ class MarketEngine:
                 seed_vol = max(100.0, st.day_volume_base * 0.02 * st.liquidity)
                 st.bids, st.asks = build_levels(st.price, st.tick_size, 5, spread_ticks, seed_vol)
 
-                # ---- 分钟线聚合 ----
+                # ---- 分钟线聚合（带上时段标识，供客户端区分盘前/竞价/盘后） ----
                 minute_ts = int(now // 60 * 60)
                 if st.cur_minute is None or st.cur_minute.ts != minute_ts:
                     if st.cur_minute is not None:
                         st.minute_bars.append(st.cur_minute)
-                    st.cur_minute = MinuteBar(minute_ts, st.price, st.price, st.price, st.price, traded, traded * new_price)
+                    st.cur_minute = MinuteBar(
+                        minute_ts, st.price, st.price, st.price, st.price,
+                        traded, traded * new_price, segment=self._segment,
+                    )
                 else:
                     cm = st.cur_minute
                     cm.high = max(cm.high, st.price)
@@ -403,6 +429,7 @@ class MarketEngine:
                     "price": b.close,
                     "volume": b.volume,
                     "avg": round(b.amount / b.volume, 4) if b.volume else b.close,
+                    "segment": b.segment,
                 }
                 for b in bars
             ]
@@ -434,6 +461,9 @@ class MarketEngine:
                         close=chunk[-1].close,
                         volume=sum(b.volume for b in chunk),
                         amount=sum(b.amount for b in chunk),
+                        # 聚合柱的时段按「首根」取：跨时段的分组本来就罕见，
+                        # 取首根能保证开盘第一根集合竞价柱不被吞进连续竞价
+                        segment=chunk[0].segment,
                     )
                 )
         return [
@@ -445,6 +475,7 @@ class MarketEngine:
                 "close": b.close,
                 "volume": b.volume,
                 "amount": round(b.amount, 2),
+                "segment": b.segment,
             }
             for b in grouped
         ]
@@ -474,6 +505,7 @@ class MarketEngine:
             up = sum(1 for s in self._states.values() if s.price > s.prev_close)
             down = sum(1 for s in self._states.values() if s.price < s.prev_close)
             total_amount = sum(s.amount for s in self._states.values())
+            st = current_session()
             return {
                 "tick": self._tick_count,
                 "listed": len(self._states),
@@ -482,11 +514,76 @@ class MarketEngine:
                 "flat": len(self._states) - up - down,
                 "total_amount": round(total_amount, 2),
                 "index": self.index_quote(),
+                "segment": st.segment,
             }
 
     def all_codes(self) -> list[str]:
         with self._lock:
             return list(self._states.keys())
+
+    # ------------------------------------------------------------------ #
+    # 引擎状态与运维控制（后台「模拟引擎」页签使用）
+    # ------------------------------------------------------------------ #
+    def status(self) -> dict:
+        """引擎运行态快照：开关、节奏、交易模式、时段与标的统计。"""
+        from .session import normalize_mode
+
+        with self._lock:
+            st = current_session()
+            listed = len(self._states)
+            advancing = bool(settings.engine_enabled) and st.is_open
+            return {
+                "enabled": bool(settings.engine_enabled),
+                "advancing": advancing,          # 此刻是否真的在推进价格
+                "ready": self.ready,
+                "tick_count": self._tick_count,
+                "tick_seconds": settings.tick_seconds,
+                "listed": listed,
+                "segment": st.segment,
+                "trade_mode": normalize_mode(getattr(settings, "trade_mode", None)),
+                "session": {
+                    "mode": st.mode,
+                    "mode_label": st.mode_label,
+                    "phase": st.phase,
+                    "segment": st.segment,
+                    "label": st.label,
+                    "is_open": st.is_open,
+                    "can_trade": st.can_trade,
+                    "trade_date": st.trade_date,
+                    "seconds_left": st.seconds_left,
+                },
+                "stats": {
+                    "up": sum(1 for s in self._states.values() if s.price > s.prev_close),
+                    "down": sum(1 for s in self._states.values() if s.price < s.prev_close),
+                    "total_amount": round(sum(s.amount for s in self._states.values()), 2),
+                },
+            }
+
+    def reset(self) -> dict:
+        """重置内存中的行情状态，让所有标的回到昨收基准。
+
+        后台排查「K 线明显跑飞」时用得上：清掉分钟线与累计成交，
+        标的参数、持仓与账户资金都不动，所以不影响对账。
+        """
+        with self._lock:
+            for s in self._states.values():
+                s.price = s.prev_close
+                s.open = s.prev_close
+                s.high = s.prev_close
+                s.low = s.prev_close
+                s.volume = 0
+                s.amount = 0.0
+                s.minute_bars.clear()
+                s.cur_minute = None
+                s.cond_vol = 1e-4
+            self._index_value = self._index_prev_close
+            self._index_open = self._index_prev_close
+            self._index_high = self._index_prev_close
+            self._index_low = self._index_prev_close
+            self._index_minutes.clear()
+            self._market_ret = 0.0
+            self._tick_count = 0
+            return self.status()
 
 
 market_engine = MarketEngine()

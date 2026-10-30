@@ -44,8 +44,13 @@ class Settings:
 
         # ---- 撮合 / 模拟引擎 ----
         self.tick_seconds: float = float(os.getenv("STLAND_TICK_SECONDS", "1"))
-        # always=模拟交易所全天连续竞价；real=严格按 A 股时段（含集合竞价）
-        self.session_mode: str = os.getenv("STLAND_SESSION_MODE", "always")
+        # 交易模式：a_share=A股（默认，含集合竞价）/ us=美股 / continuous=24h 连续竞价
+        # 旧环境变量 STLAND_SESSION_MODE 仍兼容（always->continuous, real->a_share）
+        self.trade_mode: str = os.getenv(
+            "STLAND_TRADE_MODE", os.getenv("STLAND_SESSION_MODE", "a_share")
+        )
+        # 兼容旧属性名，避免第三方脚本直接读 settings.session_mode 时报错
+        self.session_mode: str = self.trade_mode
         self.force_open: bool = _bool("STLAND_FORCE_OPEN", False)
         self.history_days: int = int(os.getenv("STLAND_HISTORY_DAYS", "240"))
         self.engine_enabled: bool = _bool("STLAND_ENGINE_ENABLED", True)

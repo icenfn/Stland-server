@@ -63,7 +63,7 @@ def summary(session: Session = Depends(get_session), user: User = Depends(curren
     for t in session.exec(
         select(Trade).where(
             Trade.user_id == user.id,
-            Trade.side == OrderSide.buy,
+            Trade.side == OrderSide.BUY,
             Trade.created_at >= day_start,
         )
     ).all():

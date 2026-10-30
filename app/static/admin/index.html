@@ -180,6 +180,7 @@ td .empty,.empty{color:var(--text-3); text-align:center; padding:18px 0;}
     <button data-tab="institution">机构账户</button>
     <button data-tab="admins">管理员</button>
     <button data-tab="stocks">标的与指数</button>
+    <button data-tab="engine">模拟引擎</button>
     <button data-tab="risk">风险偏好</button>
     <button data-tab="config">系统配置</button>
     <button data-tab="data">数据初始化</button>
@@ -309,6 +310,32 @@ td .empty,.empty{color:var(--text-3); text-align:center; padding:18px 0;}
     </section>
 
     <!-- 风险偏好（只读分布，无历史档案） -->
+    <!-- 模拟引擎 -->
+    <section class="page" id="page-engine">
+      <div class="panel">
+        <div class="row-between">
+          <h3>引擎运行态 <span class="n" id="engineModeTag"></span></h3>
+          <div class="row">
+            <button class="btn btn-ghost" id="refreshEngine">刷新</button>
+            <button class="btn btn-ghost" id="resetEngine">重置行情</button>
+            <button class="btn btn-primary" id="toggleEngine">启停</button>
+          </div>
+        </div>
+        <div class="kpis" id="engineKpis"></div>
+        <div class="dist" id="engineSession"></div>
+        <p class="muted" style="font-size:11px; margin:12px 0 0; line-height:1.7;">
+          推进状态取决于「引擎开关」与「交易模式」两者：引擎开着但当前处于集合竞价、
+          午间休市或收盘后时，价格不会继续推进（<b>推进中=否</b>），这是交易模式本身的约束，
+          不是故障。交易模式在「系统配置」页签切换；重置行情只把价格拉回昨收并清空分钟线，
+          不动标的参数、账户资金与持仓。
+        </p>
+      </div>
+      <div class="panel">
+        <h3>引擎参数速览 <span class="n">数值调整请到「系统配置」</span></h3>
+        <div class="dist" id="engineParams"></div>
+      </div>
+    </section>
+
     <section class="page" id="page-risk">
       <div class="panel">
         <div class="row-between">
@@ -556,6 +583,7 @@ $('tabs').addEventListener('click', (e) => {
     institution: () => loadAccounts('institution'),
     admins: loadAdmins,
     stocks: () => { loadStocks(); loadIndices(); },
+    engine: loadEngine,
     risk: loadRisk,
     config: loadConfig,
     data: loadSeedStatus,
@@ -921,6 +949,93 @@ async function loadRisk() {
 $('refreshRisk').addEventListener('click', loadRisk);
 
 /* ================================================================== *
+ * 模拟引擎（运行态 + 启停 + 重置）
+ * ================================================================== */
+async function loadEngine() {
+  $('engineKpis').innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const d = await api('/api/admin/engine');
+    state.engine = d;
+    const s = d.session || {};
+    $('engineModeTag').textContent = `${s.mode_label || s.mode || ''} · ${s.label || ''}`;
+
+    const toggleTxt = d.enabled ? '关闭引擎' : '开启引擎';
+    $('toggleEngine').textContent = toggleTxt;
+    $('toggleEngine').classList.toggle('btn-danger', d.enabled);
+    $('toggleEngine').classList.toggle('btn-primary', !d.enabled);
+
+    const items = [
+      ['引擎开关', d.enabled ? '已开启' : '已关闭'],
+      ['价格推进', d.advancing ? '推进中' : '未推进'],
+      ['交易模式', s.mode_label || s.mode || '--'],
+      ['当前时段', s.label || '--'],
+      ['可撮合', s.is_open ? '是' : '否'],
+      ['可申报', s.can_trade ? '是' : '否'],
+      ['推进间隔', `${d.tick_seconds ?? '--'} 秒`],
+      ['推进次数', d.tick_count ?? '--'],
+      ['标的数量', d.listed ?? '--'],
+      ['本时段剩余', s.seconds_left ? `${Math.floor(s.seconds_left / 60)} 分钟` : '不限'],
+    ];
+    $('engineKpis').innerHTML = items.map(([a, v]) =>
+      `<div class="kpi"><div class="k">${a}</div><div class="v">${v ?? '--'}</div></div>`).join('');
+
+    const st = d.stats || {};
+    $('engineSession').innerHTML = [
+      ['交易日期', s.trade_date || '--'],
+      ['阶段标识', s.phase || '--'],
+      ['K线时段', s.segment || '--'],
+      ['上涨', st.up ?? 0], ['下跌', st.down ?? 0],
+      ['累计成交额', num(st.total_amount)],
+    ].map(([a, v]) => `<div class="dist-item"><div class="k">${a}</div><div class="v">${v}</div></div>`).join('');
+
+    // 参数速览：直接从系统配置里挑出与引擎相关的几项，避免再多发一次请求
+    let cfg = state.cfg || [];
+    if (!cfg.length) {
+      try { const c = await api('/api/admin/settings'); state.cfg = c.items || []; cfg = state.cfg; } catch (e) { /* 忽略 */ }
+    }
+    const keys = ['trade_mode', 'tick_seconds', 'engine_enabled', 'market_volatility', 'market_drift'];
+    const picked = cfg.filter((c) => keys.includes(c.key));
+    $('engineParams').innerHTML = picked.length
+      ? picked.map((c) => {
+          let v = c.value;
+          if (c.kind === 'bool') v = v ? '开启' : '关闭';
+          else if (c.kind === 'choice') {
+            const hit = (c.choice_labels || []).find((o) => o.value === c.value);
+            v = hit ? hit.label : c.value;
+          }
+          return `<div class="dist-item"><div class="k">${esc(c.label)}</div><div class="v">${esc(String(v))}</div></div>`;
+        }).join('')
+      : '<div class="empty">暂无可展示参数</div>';
+  } catch (e) {
+    $('engineKpis').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+$('refreshEngine').addEventListener('click', loadEngine);
+
+$('toggleEngine').addEventListener('click', async () => {
+  const cur = state.engine || {};
+  const next = !cur.enabled;
+  if (!confirm(next ? '开启行情引擎？价格将按当前交易模式的时段推进。' : '关闭行情引擎？价格会立即冻结，账户与持仓数据不受影响。')) return;
+  try {
+    const d = await api('/api/admin/engine/toggle', {
+      method: 'POST', body: JSON.stringify({ enabled: next }),
+    });
+    banner(next ? '引擎已开启' : '引擎已关闭', 'ok');
+    state.engine = d;
+    loadEngine();
+  } catch (e) { banner(e.message, 'err'); }
+});
+
+$('resetEngine').addEventListener('click', async () => {
+  if (!confirm('重置行情快照？所有标的将回到昨收价，分钟线与累计成交清空。标的参数、账户资金与持仓不会变动。')) return;
+  try {
+    await api('/api/admin/engine/reset', { method: 'POST', body: '{}' });
+    banner('行情已重置到昨收基准', 'ok');
+    loadEngine();
+  } catch (e) { banner(e.message, 'err'); }
+});
+
+/* ================================================================== *
  * 系统配置（运行期可改）
  * ================================================================== */
 async function loadConfig() {
@@ -938,8 +1053,11 @@ async function loadConfig() {
           <option value="true" ${c.value ? 'selected' : ''}>开启</option>
           <option value="false" ${!c.value ? 'selected' : ''}>关闭</option></select>`;
       } else if (c.kind === 'choice') {
-        control = `<select data-cfg="${c.key}">${c.choices.map((o) =>
-          `<option value="${esc(o)}" ${o === c.value ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+        const opts = (c.choice_labels && c.choice_labels.length)
+          ? c.choice_labels.map((o) => ({ value: o.value, label: o.label }))
+          : c.choices.map((o) => ({ value: o, label: o }));
+        control = `<select data-cfg="${c.key}">${opts.map((o) =>
+          `<option value="${esc(o.value)}" ${o.value === c.value ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
       } else {
         const step = c.kind === 'int' ? '1' : 'any';
         control = `<input type="number" step="${step}" data-cfg="${c.key}" value="${c.value}" />`;
