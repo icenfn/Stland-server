@@ -1,15 +1,16 @@
-<!-- 登录 -->
+{# 登录：整页只有一张 mdui 卡片，样式全部来自组件 #}
 <div id="login">
-  <form class="login-card" id="loginForm">
-    <h1>Stland 运营后台</h1>
-    <div class="sub">管理员独立账号，与交易账户互不相通</div>
-    <div class="field"><label>管理员账号</label><input id="username" autocomplete="username" required /></div>
-    <div class="field"><label>口令</label><input id="password" type="password" autocomplete="current-password" required /></div>
-    <div class="field"><button class="btn btn-primary btn-block" id="loginBtn" type="submit">登录</button></div>
-    <div id="loginErr" class="banner err" style="position:static; transform:none; opacity:0; display:block; margin-top:4px;"></div>
-    <p class="muted" style="font-size:10px; margin:10px 0 0; line-height:1.6;">
-      首次部署时系统会自动创建引导管理员（默认 admin / stland-admin），
-      登录后请立即在「账户」页签修改口令。
-    </p>
-  </form>
+  <div style="display: flex; justify-content: center; padding: 12vh 16px 0">
+    <mdui-card style="width: 100%; max-width: 380px; padding: 24px">
+      <div style="font-size: 20px; font-weight: 600; margin-bottom: 4px">Stland 运营后台</div>
+      <div style="opacity: .65; font-size: 13px; margin-bottom: 16px">请使用管理员账号登录</div>
+
+      <form id="loginForm" class="stack">
+        <mdui-text-field label="用户名" id="username" autocomplete="username"></mdui-text-field>
+        <mdui-text-field label="口令" id="password" type="password" autocomplete="current-password"></mdui-text-field>
+        <div id="loginErr" style="color: var(--mdui-color-error); font-size: 12px; min-height: 16px"></div>
+        <mdui-button type="submit" variant="filled" id="loginBtn" style="width: 100%">登录</mdui-button>
+      </form>
+    </mdui-card>
+  </div>
 </div>

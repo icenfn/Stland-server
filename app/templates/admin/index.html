@@ -1,50 +1,89 @@
 {% extends "admin/base.html" %}
 {% block body %}
-<div id="banner" class="banner"></div>
-
 {% include "admin/login.html" %}
 
-<div id="app">
-  {# 导航改用 Sober 的抽屉：宽屏侧栏常驻，窄屏覆盖层 + 遮罩，断点由组件自己处理 #}
-  <s-drawer id="shell">
-    <nav slot="start" class="side">
-      <div class="side-brand">
-        <span class="dot"></span>
-        <span>Stland 运营后台</span>
-      </div>
+<div id="app" hidden>
+  {# mdui-layout 负责整体排布：顶栏 + 抽屉 + 主内容区，全部由组件自带样式完成 #}
+  <mdui-layout>
+    <mdui-top-app-bar>
+      <mdui-button-icon icon="menu" id="navToggle" aria-label="打开导航"></mdui-button-icon>
+      <mdui-top-app-bar-title>Stland 运营后台</mdui-top-app-bar-title>
+      <div style="flex-grow: 1"></div>
+      <span id="pageTitle" style="opacity: .7; margin-right: 8px">{{ nav[0].label }}</span>
+      <span id="who" style="opacity: .7; margin-right: 8px"></span>
+      <mdui-button variant="text" id="logoutBtn">退出</mdui-button>
+    </mdui-top-app-bar>
 
-      <s-menu class="side-menu">
+    {# 抽屉导航：宽屏常驻侧栏，窄屏点菜单键滑出；选中态用 active 属性 #}
+    <mdui-navigation-drawer id="nav">
+      <mdui-list>
         {% for item in nav %}
-        <s-menu-item data-page="{{ item.key }}"{% if loop.first %} checked{% endif %}>{{ item.label }}</s-menu-item>
+        <mdui-list-item data-page="{{ item.key }}"{% if loop.first %} active{% endif %} rounded>
+          {{ item.label }}
+        </mdui-list-item>
         {% endfor %}
-      </s-menu>
+      </mdui-list>
+    </mdui-navigation-drawer>
 
-      <div class="side-foot">
-        <span class="who" id="who"></span>
-        <button class="btn btn-ghost" id="logoutBtn">退出</button>
-      </div>
-    </nav>
-
-    <div class="content">
-      <header class="topbar">
-        <button class="nav-toggle" id="navToggle" aria-label="打开导航">
-          <s-icon name="menu"></s-icon>
-        </button>
-        <div class="brand"><span class="dot"></span>Stland 运营后台</div>
-        <span class="spacer"></span>
-        <span class="page-title" id="pageTitle">{{ nav[0].label }}</span>
-      </header>
-
-      <main>
-        {% for item in nav %}
-        {% include "admin/pages/" ~ item.key ~ ".html" %}
-        {% endfor %}
-      </main>
-    </div>
-  </s-drawer>
+    <mdui-layout-main>
+      {% for item in nav %}
+      {% include "admin/pages/" ~ item.key ~ ".html" %}
+      {% endfor %}
+    </mdui-layout-main>
+  </mdui-layout>
 </div>
 
-{% include "admin/modals.html" %}
+{# 新增账户 / 新增管理员 / 编辑标的：三处都是「多字段表单」，用 mdui 对话框承载 #}
+<mdui-dialog id="dlgAccount" icon="person_add">
+  <span slot="headline">新增交易账户</span>
+  <div class="stack">
+    <mdui-text-field label="用户名" id="acUsername"></mdui-text-field>
+    <mdui-text-field label="昵称" id="acDisplay"></mdui-text-field>
+    <mdui-text-field label="初始资金（元）" id="acCash" type="number" value="1000000"></mdui-text-field>
+    <mdui-select label="角色" id="acRole" value="retail">
+      <mdui-menu-item value="retail">零售</mdui-menu-item>
+      <mdui-menu-item value="institution">机构</mdui-menu-item>
+    </mdui-select>
+    <mdui-text-field label="登录口令（至少 8 位）" id="acPassword" type="password"></mdui-text-field>
+  </div>
+  <mdui-button slot="action" variant="text" id="acCancel">取消</mdui-button>
+  <mdui-button slot="action" variant="filled" id="acSubmit">创建</mdui-button>
+</mdui-dialog>
+
+<mdui-dialog id="dlgAdmin" icon="admin_panel_settings">
+  <span slot="headline">新增管理员</span>
+  <div class="stack">
+    <mdui-text-field label="用户名" id="adUsername"></mdui-text-field>
+    <mdui-text-field label="昵称" id="adDisplay"></mdui-text-field>
+    <mdui-text-field label="登录口令（至少 8 位）" id="adPassword" type="password"></mdui-text-field>
+  </div>
+  <mdui-button slot="action" variant="text" id="adCancel">取消</mdui-button>
+  <mdui-button slot="action" variant="filled" id="adSubmit">创建</mdui-button>
+</mdui-dialog>
+
+<mdui-dialog id="dlgStock" icon="candlestick_chart">
+  <span slot="headline">标的参数</span>
+  <div class="stack">
+    <mdui-text-field label="代码（如 600519.SH）" id="stCode"></mdui-text-field>
+    <mdui-text-field label="名称" id="stName"></mdui-text-field>
+    <mdui-text-field label="板块" id="stBoard"></mdui-text-field>
+    <mdui-text-field label="行业" id="stIndustry"></mdui-text-field>
+    <mdui-text-field label="昨收" id="stPrevClose" type="number"></mdui-text-field>
+    <mdui-text-field label="涨停价" id="stLimitUp" type="number"></mdui-text-field>
+    <mdui-text-field label="跌停价" id="stLimitDown" type="number"></mdui-text-field>
+  </div>
+  <mdui-button slot="action" variant="text" id="stCancel">取消</mdui-button>
+  <mdui-button slot="action" variant="filled" id="stSubmit">保存</mdui-button>
+</mdui-dialog>
+
+<mdui-dialog id="dlgAdjust" icon="account_balance_wallet">
+  <span slot="headline">调整可用资金</span>
+  <div class="stack">
+    <mdui-text-field label="目标可用资金（元）" id="ajCash" type="number"></mdui-text-field>
+  </div>
+  <mdui-button slot="action" variant="text" id="ajCancel">取消</mdui-button>
+  <mdui-button slot="action" variant="filled" id="ajSubmit">确定</mdui-button>
+</mdui-dialog>
 {% endblock %}
 
 {% block scripts %}

@@ -1,14 +1,19 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>{% block title %}Stland 运营后台{% endblock %}</title>
-<link rel="stylesheet" href="/static/admin/app.css" />
-<script type="module" src="/static/vendor/sober/main.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>{% block title %}Stland 运营后台{% endblock %}</title>
+
+  {# mdui 2：自带 Material 3 设计令牌与全部组件样式，后台不再自定义任何外观 #}
+  <link rel="stylesheet" href="/static/vendor/mdui/mdui.css" />
+  <link rel="stylesheet" href="/static/admin/app.css" />
 </head>
 <body>
 {% block body %}{% endblock %}
+
+{# mdui.global.js 会自动注册全部 web components，并把 alert/confirm/prompt/snackbar 挂到 window.mdui #}
+<script src="/static/vendor/mdui/mdui.global.js"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

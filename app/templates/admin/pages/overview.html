@@ -1,19 +1,13 @@
-<section class="page" id="page-overview" data-page="overview">
-      <div class="panel">
-        <div class="row-between">
-          <h3>运营总览 <span class="n" id="sessionInfo"></span></h3>
-          <button class="btn btn-ghost" id="refreshOv">刷新</button>
-        </div>
-        <div class="kpis" id="kpis"></div>
-      </div>
-      <div class="panel">
-        <h3>账户结构</h3>
-        <div class="dist" id="roleDist"></div>
-      </div>
-      <div class="panel">
-        <h3>风险偏好分布</h3>
-        <div class="dist" id="ovRisk"></div>
-      </div>
-    </section>
+{# 总览：指标卡 + 市场状态 #}
+<section class="page on" id="page-overview">
+  <div class="toolbar">
+    <mdui-button variant="tonal" icon="refresh" id="refreshOverview">刷新</mdui-button>
+  </div>
 
-    <!-- 零售 / 机构（同一张交易账户表，按 role 过滤） -->
+  <div class="kpi-grid" id="ovKpi"></div>
+
+  <mdui-card style="padding: 16px">
+    <div style="font-weight: 600; margin-bottom: 12px">市场状态</div>
+    <div class="kpi-grid" id="ovMarket"></div>
+  </mdui-card>
+</section>
