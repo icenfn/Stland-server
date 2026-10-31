@@ -46,7 +46,9 @@ def _snapshot() -> dict:
     return {
         "index": indices[0] if indices else {},
         "indices": indices,
-        "index_minutes": index_engine.index_minutes(session, index_engine.INDEX_LIST[0], limit=120),
+        # 取满一天 240 个分钟位：客户端按「时间位」画横轴，
+        # 只给 120 个点的话分时线会停在半幅宽，看起来像被截断了
+        "index_minutes": index_engine.index_minutes(session, index_engine.INDEX_LIST[0], limit=240),
         "stats": market_engine.stats(),
         "session": {
             "phase": st.phase,

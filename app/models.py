@@ -164,7 +164,7 @@ class Stock(SQLModel, table=True):
 
     code: str = Field(primary_key=True, max_length=12)
     name: str = Field(max_length=24, index=True)
-    board: str = Field(default="主板", max_length=12)   # 主板 / 创业板 / 科创板 / 北交所
+    board: str = Field(default="主板", max_length=12)   # 主板 / 创业板 / 科创板
     industry: str = Field(default="", max_length=24)
     hotword: str = Field(default="", max_length=40)     # 对应的抖音热词
     theme: str = Field(default="", max_length=80)

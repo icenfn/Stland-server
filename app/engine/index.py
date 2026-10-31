@@ -156,11 +156,16 @@ def index_quote(session: Session, meta: IndexMeta) -> dict:
     }
 
 
-def index_minutes(session: Session, meta: IndexMeta, limit: int = 240) -> list[dict]:
+def index_minutes(session: Session, meta: IndexMeta, limit: int = 240, days: int = 1) -> list[dict]:
     """指数分时：把各成分的分钟收盘价按「对昨收的比值」等权平均后还原成点位。
 
     这样合成的分时与 `index_quote` 的口径一致 —— 同一个时刻，分时末点
     与当前点位是对得上的，不会出现「图上最后一根和上面数字不符」。
+
+    days 必须一路透传下去：路由 `/index/{code}/minutes` 支持 days=1/5，
+    而成分取数走的是与个股同一个 `minute_series(code, limit, days)`。
+    上一版这里少了 days 形参，路由把 days 传进来会直接 TypeError（500），
+    前端拿不到任何点，指数分时于是永远是一片空白。
     """
     members = _members(session, meta)
     quotes = market_engine.quotes()
@@ -170,7 +175,7 @@ def index_minutes(session: Session, meta: IndexMeta, limit: int = 240) -> list[d
         prev = float(q.get("prev_close") or 0)
         if prev <= 0:
             continue
-        bars = market_engine.minute_series(s.code, limit)
+        bars = market_engine.minute_series(s.code, limit, days=days)
         if not bars:
             continue
         # 第三项是该分钟的成交量：指数没有自己的成交，量能只能由成分合计得到

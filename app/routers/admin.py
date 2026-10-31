@@ -525,7 +525,7 @@ class StockIn(BaseModel):
     float_shares: float = Field(default=5e8, gt=0)
 
 
-LIMIT_BY_BOARD = {"主板": 0.10, "创业板": 0.20, "科创板": 0.20, "北交所": 0.30}
+LIMIT_BY_BOARD = {"主板": 0.10, "创业板": 0.20, "科创板": 0.20}
 
 
 def _apply(stock: Stock, payload: StockIn) -> Stock:
