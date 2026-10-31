@@ -31,6 +31,19 @@ jobs:
           STLAND_SIGNATURE_REQUIRED: 'false'
         run: pytest -q
 
+      # 冷启动只建表与引导管理员，标的/账户改为后台「数据初始化」显式注入；
+      # 冒烟测试要断言引擎装满了 28 个标的，所以先按后台按钮的同一实现播种一次
+      - name: Seed data
+        env:
+          STLAND_DATA_DIR: ./data
+          STLAND_SIGNATURE_REQUIRED: 'false'
+        run: |
+          python - <<'PY'
+          from app.bootstrap import bootstrap, init_seed_data
+          print('bootstrap:', bootstrap())
+          print('seed:', init_seed_data(include_history=False))
+          PY
+
       - name: Boot smoke test
         env:
           STLAND_DATA_DIR: ./data
