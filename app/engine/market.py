@@ -71,6 +71,18 @@ class SecurityState:
     last_close_date: str = ""
     minute_bars: deque[MinuteBar] = field(default_factory=lambda: deque(maxlen=1440))
     cur_minute: MinuteBar | None = None
+    # 按自然日留存的分钟线，只服务「五日」视图。
+    # minute_bars 的 maxlen 是 1440（正好一天），日切后昨天会被挤掉，
+    # 单靠它拼不出跨日分时；这里按交易日单独归档，天然支持跨日连续轴。
+    day_frames: dict[str, list] = field(default_factory=dict)
+
+    def archive(self, bar, keep_days: int = 5) -> None:
+        """把一根已收好的分钟线归档到所属自然日，只保留最近 keep_days 天。"""
+        key = time.strftime("%Y-%m-%d", time.localtime(bar.ts))
+        self.day_frames.setdefault(key, []).append(bar)
+        if len(self.day_frames) > keep_days:
+            for stale in sorted(self.day_frames)[:-keep_days]:
+                self.day_frames.pop(stale, None)
     cond_vol: float = 0.0           # GARCH 条件方差
     day_volume_base: float = 0.0
     day_progress: float = 0.0       # 当日已走过的交易进度（0~1），量比要用
@@ -364,6 +376,8 @@ class MarketEngine:
                 if st.cur_minute is None or st.cur_minute.ts != minute_ts:
                     if st.cur_minute is not None:
                         st.minute_bars.append(st.cur_minute)
+                        # 同时归档到当日帧，「五日」视图要靠它跨日拼接
+                        st.archive(st.cur_minute)
                     st.cur_minute = MinuteBar(
                         minute_ts, st.price, st.price, st.price, st.price,
                         traded, traded * new_price, segment=self._segment,
@@ -414,25 +428,43 @@ class MarketEngine:
             st = self._states.get(code)
             return st.price if st else 0.0
 
-    def minute_series(self, code: str, limit: int = 240) -> list[dict]:
+    def minute_series(self, code: str, limit: int = 240, days: int = 1) -> list[dict]:
+        """分时序列。days=1 取当日；days>1 取最近 N 个自然日首尾相接的连续轴。
+
+        跨日时各日之间在时间上并不连续（隔夜、周末），所以除了时间戳，
+        再补一个 `day` 字段：客户端靠它画日分隔线，并给每天单独画一条
+        「当日开盘基准」虚线 —— 否则一条线跨了五天，看不出哪天是涨是跌。
+        """
         with self._lock:
             st = self._states.get(code)
             if st is None:
                 return []
-            bars = list(st.minute_bars)
-            if st.cur_minute is not None:
-                bars.append(st.cur_minute)
+            if days > 1:
+                merged: list = []
+                for key in sorted(st.day_frames)[-days:]:
+                    merged.extend(st.day_frames[key])
+                if st.cur_minute is not None:
+                    merged.append(st.cur_minute)
+                bars = merged
+            else:
+                bars = list(st.minute_bars)
+                if st.cur_minute is not None:
+                    bars.append(st.cur_minute)
             bars = bars[-limit:]
-            return [
-                {
+            out: list[dict] = []
+            for b in bars:
+                item = {
                     "t": b.ts,
                     "price": b.close,
                     "volume": b.volume,
                     "avg": round(b.amount / b.volume, 4) if b.volume else b.close,
                     "segment": b.segment,
                 }
-                for b in bars
-            ]
+                # 单日视图不需要日期，多一个字段只会让客户端多一层判断
+                if days > 1:
+                    item["day"] = time.strftime("%Y-%m-%d", time.localtime(b.ts))
+                out.append(item)
+            return out
 
     def kline(self, code: str, period: str = "1min") -> list[dict]:
         """分钟级 K 线（1/5/15/30/60分钟），由分钟序列聚合。"""
@@ -443,7 +475,8 @@ class MarketEngine:
             bars = list(st.minute_bars)
             if st.cur_minute is not None:
                 bars.append(st.cur_minute)
-        step = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "60min": 60}.get(period, 1)
+        # 120 分 = 半日线：A 股一天 240 分钟正好两根，用于「更多」里的 120 分
+        step = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "60min": 60, "120min": 120}.get(period, 1)
         if step == 1:
             grouped = bars
         else:

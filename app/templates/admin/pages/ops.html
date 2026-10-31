@@ -1,0 +1,19 @@
+<section class="page" id="page-ops" data-page="ops">
+      <div class="panel">
+        <div class="row-between">
+          <h3>撮合质量</h3>
+          <div class="row">
+            <button class="btn btn-ghost" id="refreshOps">刷新</button>
+            <button class="btn btn-ghost" id="settleBtn">日终结转</button>
+          </div>
+        </div>
+        <div class="dist" id="matchKpi"></div>
+      </div>
+      <div class="panel">
+        <h3>成交额 Top 标的</h3>
+        <table>
+          <thead><tr><th>代码</th><th>名称</th><th>成交笔数</th><th>成交额</th><th>成交量</th></tr></thead>
+          <tbody id="matchBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </section>

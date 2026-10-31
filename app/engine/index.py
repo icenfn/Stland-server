@@ -197,7 +197,7 @@ def index_kline(session: Session, meta: IndexMeta, period: str = "1min", limit: 
     minutes = index_minutes(session, meta, limit=1440)
     if not minutes:
         return []
-    step = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "60min": 60}.get(period, 1)
+    step = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "60min": 60, "120min": 120}.get(period, 1)
     bars: list[dict] = []
     for i in range(0, len(minutes), step):
         chunk = minutes[i : i + step]

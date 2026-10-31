@@ -17,7 +17,6 @@ from datetime import datetime
 
 from sqlmodel import Session, select
 
-from ..config import settings
 from ..engine.book import Level, walk_book, vwap
 from ..engine.market import market_engine
 from ..engine.session import current_session

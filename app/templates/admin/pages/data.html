@@ -1,0 +1,22 @@
+<section class="page" id="page-data" data-page="data">
+      <div class="panel">
+        <div class="row-between"><h3>当前数据</h3><button class="btn btn-ghost" id="refreshSeed">刷新</button></div>
+        <div class="dist" id="seedStatus"></div>
+      </div>
+      <div class="panel">
+        <h3>手动注入标准数据集</h3>
+        <p class="muted" style="font-size:11px; margin:0 0 10px;">
+          启动时不再自动写入任何业务数据。下面三项都幂等：重复点击不会产生重复记录，
+          运营改过的标的参数也不会被覆盖。标的是真删除（不留标记），所以删掉的
+          内置默认标的会在下次注入时被重新加回 —— 想彻底不要，删完不要再点注入。
+        </p>
+        <div class="row" style="gap:16px; margin-bottom:12px;">
+          <label class="row" style="gap:6px;"><input type="checkbox" id="seedStocks" checked /> 默认标的</label>
+          <label class="row" style="gap:6px;"><input type="checkbox" id="seedUsers" checked /> 种子账户（零售 / 机构）</label>
+          <label class="row" style="gap:6px;"><input type="checkbox" id="seedHistory" checked /> 历史日线</label>
+        </div>
+        <button class="btn btn-primary" id="seedBtn">执行注入</button>
+      </div>
+    </section>
+
+    <!-- 撮合质量 -->

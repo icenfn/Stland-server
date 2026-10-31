@@ -1,0 +1,30 @@
+<section class="page" id="page-admins" data-page="admins">
+      <div class="panel">
+        <div class="row-between">
+          <h3>管理员账户 <span class="n" id="adminCount"></span></h3>
+          <button class="btn btn-primary" id="newAdminBtn">新增管理员</button>
+        </div>
+        <p class="muted" style="font-size:11px; margin:0 0 10px;">
+          管理员是独立的一张表：不参与交易、没有资金与持仓，只能进入本后台。
+          不能删除自己，也不能删到一个不剩。
+        </p>
+        <table>
+          <thead><tr><th>账号</th><th>昵称</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead>
+          <tbody id="adminBody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>修改我的口令</h3>
+        <form id="pwdForm" class="row" style="align-items:flex-end; gap:10px;">
+          <div class="field" style="margin:0; min-width:160px;">
+            <label>原口令</label><input id="pwdOld" type="password" required />
+          </div>
+          <div class="field" style="margin:0; min-width:160px;">
+            <label>新口令（≥8 位）</label><input id="pwdNew" type="password" minlength="8" required />
+          </div>
+          <button class="btn btn-primary" type="submit">更新口令</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- 标的与指数 -->

@@ -13,9 +13,10 @@ from sqlmodel import Session, select
 from ..db import get_session
 from ..engine import index as index_engine
 from ..engine.market import market_engine
+from ..engine.periods import LONG_PERIODS, aggregate_daily
 from ..engine.session import current_session
 from ..models import DailyBar, Stock
-from ..services.deps import optional_signature, signed_request
+from ..services.deps import optional_signature
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 
@@ -181,20 +182,36 @@ def index_detail(code: str, session: Session = Depends(get_session)) -> dict:
 
 
 @router.get("/index/{code}/minutes")
-def index_minutes(code: str, limit: int = Query(default=240, ge=1, le=1440), session: Session = Depends(get_session)) -> dict:
+def index_minutes(
+    code: str,
+    limit: int = Query(default=240, ge=1, le=1440),
+    days: int = Query(default=1, ge=1, le=5),
+    session: Session = Depends(get_session),
+) -> dict:
+    """指数分时。days=5 时由成分股的五日分钟序列等权合成。"""
     meta = index_engine.get_index(code)
-    return {"code": meta.code, "items": index_engine.index_minutes(session, meta, limit=limit)}
+    return {"code": meta.code, "items": index_engine.index_minutes(session, meta, limit=limit, days=days)}
 
 
 @router.get("/index/{code}/kline")
 def index_kline(
     code: str,
-    period: str = Query(default="1min", pattern="^(1min|5min|15min|30min|60min|day)$"),
+    period: str = Query(
+        default="1min",
+        pattern="^(1min|5min|15min|30min|60min|120min|day|week|month|quarter|year)$",
+    ),
     limit: int = Query(default=120, ge=10, le=500),
     session: Session = Depends(get_session),
 ) -> dict:
     """指数 K 线。日线由成分股日线等权合成，分钟级由合成分时聚合。"""
     meta = index_engine.get_index(code)
+    # 周/月/季/年：取日线后按自然周期聚合，不必给指数单独维护长周期表
+    if period in LONG_PERIODS:
+        daily = index_engine.index_daily(session, meta, limit=limit * 40)
+        if not daily:
+            daily = index_engine.index_kline(session, meta, period="60min", limit=limit)
+        return {"code": meta.code, "period": period, "items": aggregate_daily(daily, period)[-limit:]}
+
     if period == "day":
         items = index_engine.index_daily(session, meta, limit=limit)
         if not items:
@@ -217,17 +234,48 @@ def depth(code: str) -> dict:
 
 
 @router.get("/minutes/{code}")
-def minutes(code: str, limit: int = Query(default=240, ge=1, le=1440)) -> dict:
-    return {"code": code, "items": market_engine.minute_series(code, limit)}
+def minutes(
+    code: str,
+    limit: int = Query(default=240, ge=1, le=1440),
+    days: int = Query(default=1, ge=1, le=5),
+) -> dict:
+    """分时序列。days=1 只看当天；days=5 取最近五个自然日首尾相接。"""
+    return {"code": code, "items": market_engine.minute_series(code, limit, days=days)}
 
 
 @router.get("/kline/{code}")
 def kline(
     code: str,
-    period: str = Query(default="1min", pattern="^(1min|5min|15min|30min|60min|day)$"),
+    period: str = Query(
+        default="1min",
+        pattern="^(1min|5min|15min|30min|60min|120min|day|week|month|quarter|year)$",
+    ),
     limit: int = Query(default=120, ge=10, le=500),
     session: Session = Depends(get_session),
 ) -> dict:
+    # 周/月/季/年不落库：读日线后按自然周期聚合（纯函数，见 engine/periods.py），
+    # 交易日历变化不需要回补历史，也不必多出四张要与日线对齐的冗余表
+    if period in LONG_PERIODS:
+        rows = session.exec(
+            select(DailyBar)
+            .where(DailyBar.code == code)
+            .order_by(DailyBar.trade_date.desc())
+            .limit(limit * 40)
+        ).all()
+        daily = [
+            {
+                "time": r.trade_date,
+                "open": r.open,
+                "high": r.high,
+                "low": r.low,
+                "close": r.close,
+                "volume": r.volume,
+                "amount": r.amount,
+            }
+            for r in reversed(rows)
+        ]
+        return {"code": code, "period": period, "items": aggregate_daily(daily, period)[-limit:]}
+
     if period == "day":
         rows = session.exec(
             select(DailyBar).where(DailyBar.code == code).order_by(DailyBar.trade_date.desc()).limit(limit)

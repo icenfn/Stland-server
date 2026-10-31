@@ -1,0 +1,52 @@
+{% extends "admin/base.html" %}
+{% block body %}
+<div id="banner" class="banner"></div>
+
+{% include "admin/login.html" %}
+
+<div id="app">
+  {# 导航改用 Sober 的抽屉：宽屏侧栏常驻，窄屏覆盖层 + 遮罩，断点由组件自己处理 #}
+  <s-drawer id="shell">
+    <nav slot="start" class="side">
+      <div class="side-brand">
+        <span class="dot"></span>
+        <span>Stland 运营后台</span>
+      </div>
+
+      <s-menu class="side-menu">
+        {% for item in nav %}
+        <s-menu-item data-page="{{ item.key }}"{% if loop.first %} checked{% endif %}>{{ item.label }}</s-menu-item>
+        {% endfor %}
+      </s-menu>
+
+      <div class="side-foot">
+        <span class="who" id="who"></span>
+        <button class="btn btn-ghost" id="logoutBtn">退出</button>
+      </div>
+    </nav>
+
+    <div class="content">
+      <header class="topbar">
+        <button class="nav-toggle" id="navToggle" aria-label="打开导航">
+          <s-icon name="menu"></s-icon>
+        </button>
+        <div class="brand"><span class="dot"></span>Stland 运营后台</div>
+        <span class="spacer"></span>
+        <span class="page-title" id="pageTitle">{{ nav[0].label }}</span>
+      </header>
+
+      <main>
+        {% for item in nav %}
+        {% include "admin/pages/" ~ item.key ~ ".html" %}
+        {% endfor %}
+      </main>
+    </div>
+  </s-drawer>
+</div>
+
+{% include "admin/modals.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/admin/app.js"></script>
+{% endblock %}

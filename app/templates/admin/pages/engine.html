@@ -1,0 +1,24 @@
+<section class="page" id="page-engine" data-page="engine">
+      <div class="panel">
+        <div class="row-between">
+          <h3>引擎运行态 <span class="n" id="engineModeTag"></span></h3>
+          <div class="row">
+            <button class="btn btn-ghost" id="refreshEngine">刷新</button>
+            <button class="btn btn-ghost" id="resetEngine">重置行情</button>
+            <button class="btn btn-primary" id="toggleEngine">启停</button>
+          </div>
+        </div>
+        <div class="kpis" id="engineKpis"></div>
+        <div class="dist" id="engineSession"></div>
+        <p class="muted" style="font-size:11px; margin:12px 0 0; line-height:1.7;">
+          推进状态取决于「引擎开关」与「交易模式」两者：引擎开着但当前处于集合竞价、
+          午间休市或收盘后时，价格不会继续推进（<b>推进中=否</b>），这是交易模式本身的约束，
+          不是故障。交易模式在「系统配置」页签切换；重置行情只把价格拉回昨收并清空分钟线，
+          不动标的参数、账户资金与持仓。
+        </p>
+      </div>
+      <div class="panel">
+        <h3>引擎参数速览 <span class="n">数值调整请到「系统配置」</span></h3>
+        <div class="dist" id="engineParams"></div>
+      </div>
+    </section>

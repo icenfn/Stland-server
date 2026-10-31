@@ -1,469 +1,3 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Stland 运营后台</title>
-<style>
-/* ------------------------------------------------------------------ *
- * 运营后台：单文件、零依赖、纯原生 JS。
- *
- * 为什么不引框架：后台只有一个使用者（运营），页面是「表格 + 表单」，
- * 引 React/Vue 反而要多一套构建与部署流程。单文件塞进 static/ 即可，
- * 与服务端同源发布，不会出现版本错配。
- * ------------------------------------------------------------------ */
-:root{
-  --bg:#0e141a; --panel:#161f28; --panel-2:#1c2733; --line:#26323e;
-  --text:#e6edf5; --text-2:#95a4b5; --text-3:#6b7c8f;
-  --accent:#e8383d; --ok:#2fbf7d; --warn:#e0a020; --info:#5b8def;
-  --radius:10px;
-}
-*{box-sizing:border-box;}
-body{
-  margin:0; background:var(--bg); color:var(--text);
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-  font-size:13px; line-height:1.55;
-}
-button{font-family:inherit;}
-h1,h2,h3{margin:0;}
-.tabular{font-variant-numeric:tabular-nums;}
-
-/* 登录 */
-#login{display:grid; place-items:center; min-height:100vh; padding:24px;}
-.login-card{
-  width:100%; max-width:340px; background:var(--panel); border:1px solid var(--line);
-  border-radius:14px; padding:24px;
-}
-.login-card h1{font-size:17px; margin-bottom:4px;}
-.login-card .sub{color:var(--text-3); font-size:11px; margin-bottom:18px;}
-.field{margin-bottom:12px;}
-.field label{display:block; font-size:11px; color:var(--text-2); margin-bottom:5px;}
-.field input,.field select{
-  width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
-  color:var(--text); font-size:13px; padding:9px 10px; outline:none;
-}
-.field input:focus,.field select:focus{border-color:#3a4a5c;}
-.field .hint{font-size:10px; color:var(--text-3); margin-top:4px;}
-.btn{
-  border:1px solid var(--line); background:var(--panel-2); color:var(--text-2);
-  border-radius:8px; padding:7px 12px; font-size:12px; cursor:pointer;
-}
-.btn:hover{border-color:#3a4a5c; color:var(--text);}
-.btn:disabled{opacity:.5; cursor:not-allowed;}
-.btn-primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600;}
-.btn-primary:hover{filter:brightness(1.08); color:#fff;}
-.btn-ghost{background:transparent;}
-.btn-danger{color:#ff8b8d; border-color:rgba(232,56,61,.4);}
-.btn-danger:hover{background:rgba(232,56,61,.12); color:#ff8b8d;}
-.btn-block{width:100%; padding:10px;}
-
-/* 布局 */
-#app{display:none; min-height:100vh;}
-.topbar{
-  display:flex; align-items:center; justify-content:space-between; gap:12px;
-  padding:10px 18px; border-bottom:1px solid var(--line); background:var(--panel);
-  position:sticky; top:0; z-index:20;
-}
-.brand{display:flex; align-items:center; gap:8px; font-weight:700; font-size:14px;}
-.brand .dot{width:7px; height:7px; border-radius:50%; background:var(--accent);}
-.topbar .who{color:var(--text-2); font-size:12px;}
-.tabs{display:flex; gap:2px; padding:0 14px; border-bottom:1px solid var(--line);
-  background:var(--panel); overflow-x:auto; position:sticky; top:45px; z-index:19;}
-.tabs button{
-  background:none; border:none; border-bottom:2px solid transparent; color:var(--text-3);
-  font-size:12px; padding:11px 12px; cursor:pointer; white-space:nowrap;
-}
-.tabs button.on{color:var(--text); border-bottom-color:var(--accent); font-weight:600;}
-main{padding:16px 18px 60px;}
-.page{display:none;}
-.page.on{display:block;}
-.panel{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px; margin-bottom:14px;}
-.panel h3{font-size:13px; margin-bottom:10px; display:flex; align-items:center; gap:8px;}
-.panel h3 .n{color:var(--text-3); font-weight:400; font-size:11px;}
-.row{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
-.row-between{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;}
-.muted{color:var(--text-3);}
-
-/* KPI */
-.kpis{display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px;}
-.kpi{background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:10px 12px;}
-.kpi .k{font-size:10px; color:var(--text-3);}
-.kpi .v{font-size:17px; font-weight:700; margin-top:2px; font-variant-numeric:tabular-nums;}
-.dist{display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px;}
-.dist-item{background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:9px 11px;}
-.dist-item .k{font-size:10px; color:var(--text-3);}
-.dist-item .v{font-size:15px; font-weight:700; margin-top:1px; font-variant-numeric:tabular-nums;}
-
-/* 表格 */
-table{width:100%; border-collapse:collapse; font-size:12px;}
-th{
-  text-align:left; font-weight:500; color:var(--text-3); font-size:10px;
-  padding:7px 8px; border-bottom:1px solid var(--line); white-space:nowrap;
-}
-td{padding:8px; border-bottom:1px solid rgba(38,50,62,.6); vertical-align:middle;}
-tbody tr:hover{background:rgba(255,255,255,.02);}
-td.num{text-align:right; font-variant-numeric:tabular-nums;}
-td .empty,.empty{color:var(--text-3); text-align:center; padding:18px 0;}
-.pill{display:inline-block; font-size:10px; padding:2px 7px; border-radius:999px;
-  background:var(--panel-2); border:1px solid var(--line); color:var(--text-2);}
-.pill.ok{color:var(--ok); border-color:rgba(47,191,125,.35); background:rgba(47,191,125,.1);}
-.pill.warn{color:var(--warn); border-color:rgba(224,160,32,.35); background:rgba(224,160,32,.1);}
-.pill.info{color:var(--info); border-color:rgba(91,141,239,.35); background:rgba(91,141,239,.1);}
-.pill.bad{color:#ff8b8d; border-color:rgba(232,56,61,.35); background:rgba(232,56,61,.1);}
-.search{background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
-  color:var(--text); font-size:12px; padding:7px 10px; outline:none; min-width:180px;}
-
-/* 配置项 */
-.cfg-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:10px;}
-.cfg{background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:10px 12px;}
-.cfg .t{display:flex; align-items:baseline; justify-content:space-between; gap:8px;}
-.cfg .t .lbl{font-size:12px; font-weight:600;}
-.cfg .t .key{font-size:9px; color:var(--text-3); font-family:ui-monospace,monospace;}
-.cfg .note{font-size:10px; color:var(--text-3); margin-top:3px; line-height:1.5;}
-.cfg input,.cfg select{width:100%; margin-top:6px; background:var(--panel); border:1px solid var(--line);
-  border-radius:7px; color:var(--text); font-size:12px; padding:6px 8px; outline:none;}
-.cfg.dirty{border-color:rgba(224,160,32,.55);}
-
-/* 提示条 */
-.banner{
-  position:fixed; left:50%; bottom:22px; transform:translateX(-50%) translateY(20px);
-  background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
-  padding:10px 16px; font-size:12px; opacity:0; pointer-events:none;
-  transition:opacity .2s, transform .2s; z-index:60; max-width:80vw;
-}
-.banner.show{opacity:1; transform:translateX(-50%) translateY(0);}
-.banner.ok{border-color:rgba(47,191,125,.5); color:var(--ok);}
-.banner.err{border-color:rgba(232,56,61,.5); color:#ff8b8d;}
-
-/* 弹窗 */
-.modal-mask{position:fixed; inset:0; background:rgba(0,0,0,.6); display:none;
-  place-items:center; z-index:50; padding:20px;}
-.modal-mask.show{display:grid;}
-.modal{background:var(--panel); border:1px solid var(--line); border-radius:12px;
-  padding:18px; width:100%; max-width:360px;}
-.modal h3{font-size:14px; margin-bottom:14px;}
-</style>
-</head>
-<body>
-
-<div id="banner" class="banner"></div>
-
-<!-- 登录 -->
-<div id="login">
-  <form class="login-card" id="loginForm">
-    <h1>Stland 运营后台</h1>
-    <div class="sub">管理员独立账号，与交易账户互不相通</div>
-    <div class="field"><label>管理员账号</label><input id="username" autocomplete="username" required /></div>
-    <div class="field"><label>口令</label><input id="password" type="password" autocomplete="current-password" required /></div>
-    <div class="field"><button class="btn btn-primary btn-block" id="loginBtn" type="submit">登录</button></div>
-    <div id="loginErr" class="banner err" style="position:static; transform:none; opacity:0; display:block; margin-top:4px;"></div>
-    <p class="muted" style="font-size:10px; margin:10px 0 0; line-height:1.6;">
-      首次部署时系统会自动创建引导管理员（默认 admin / stland-admin），
-      登录后请立即在「账户」页签修改口令。
-    </p>
-  </form>
-</div>
-
-<!-- 主界面 -->
-<div id="app">
-  <div class="topbar">
-    <div class="brand"><span class="dot"></span>Stland 运营后台</div>
-    <div class="row">
-      <span class="who" id="who"></span>
-      <button class="btn btn-ghost" id="logoutBtn">退出</button>
-    </div>
-  </div>
-
-  <div class="tabs" id="tabs">
-    <button data-tab="overview" class="on">总览</button>
-    <button data-tab="retail">零售账户</button>
-    <button data-tab="institution">机构账户</button>
-    <button data-tab="admins">管理员</button>
-    <button data-tab="stocks">标的与指数</button>
-    <button data-tab="engine">模拟引擎</button>
-    <button data-tab="risk">风险偏好</button>
-    <button data-tab="config">系统配置</button>
-    <button data-tab="data">数据初始化</button>
-    <button data-tab="ops">撮合质量</button>
-  </div>
-
-  <main>
-    <!-- 总览 -->
-    <section class="page on" id="page-overview">
-      <div class="panel">
-        <div class="row-between">
-          <h3>运营总览 <span class="n" id="sessionInfo"></span></h3>
-          <button class="btn btn-ghost" id="refreshOv">刷新</button>
-        </div>
-        <div class="kpis" id="kpis"></div>
-      </div>
-      <div class="panel">
-        <h3>账户结构</h3>
-        <div class="dist" id="roleDist"></div>
-      </div>
-      <div class="panel">
-        <h3>风险偏好分布</h3>
-        <div class="dist" id="ovRisk"></div>
-      </div>
-    </section>
-
-    <!-- 零售 / 机构（同一张交易账户表，按 role 过滤） -->
-    <section class="page" id="page-retail">
-      <div class="panel">
-        <div class="row-between">
-          <h3>零售账户 <span class="n" id="retailCount"></span></h3>
-          <div class="row">
-            <input class="search" id="retailSearch" placeholder="搜索用户名 / 昵称" />
-            <button class="btn btn-primary" data-newacc="retail">新建零售账户</button>
-          </div>
-        </div>
-        <table>
-          <thead><tr>
-            <th>账户</th><th>状态</th><th>可用资金</th><th>持仓市值</th><th>总资产</th>
-            <th>持仓数</th><th>风险偏好</th><th>操作</th>
-          </tr></thead>
-          <tbody id="retailBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="page" id="page-institution">
-      <div class="panel">
-        <div class="row-between">
-          <h3>机构账户 <span class="n" id="instCount"></span></h3>
-          <div class="row">
-            <input class="search" id="instSearch" placeholder="搜索用户名 / 昵称" />
-            <button class="btn btn-primary" data-newacc="institution">新建机构账户</button>
-          </div>
-        </div>
-        <table>
-          <thead><tr>
-            <th>账户</th><th>状态</th><th>可用资金</th><th>授信额度</th><th>总资产</th>
-            <th>持仓数</th><th>风险偏好</th><th>操作</th>
-          </tr></thead>
-          <tbody id="instBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- 管理员（独立表） -->
-    <section class="page" id="page-admins">
-      <div class="panel">
-        <div class="row-between">
-          <h3>管理员账户 <span class="n" id="adminCount"></span></h3>
-          <button class="btn btn-primary" id="newAdminBtn">新增管理员</button>
-        </div>
-        <p class="muted" style="font-size:11px; margin:0 0 10px;">
-          管理员是独立的一张表：不参与交易、没有资金与持仓，只能进入本后台。
-          不能删除自己，也不能删到一个不剩。
-        </p>
-        <table>
-          <thead><tr><th>账号</th><th>昵称</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead>
-          <tbody id="adminBody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
-        </table>
-      </div>
-      <div class="panel">
-        <h3>修改我的口令</h3>
-        <form id="pwdForm" class="row" style="align-items:flex-end; gap:10px;">
-          <div class="field" style="margin:0; min-width:160px;">
-            <label>原口令</label><input id="pwdOld" type="password" required />
-          </div>
-          <div class="field" style="margin:0; min-width:160px;">
-            <label>新口令（≥8 位）</label><input id="pwdNew" type="password" minlength="8" required />
-          </div>
-          <button class="btn btn-primary" type="submit">更新口令</button>
-        </form>
-      </div>
-    </section>
-
-    <!-- 标的与指数 -->
-    <section class="page" id="page-stocks">
-      <div class="panel">
-        <div class="row-between">
-          <h3>标的 <span class="n" id="stockCount"></span></h3>
-          <div class="row">
-            <button class="btn btn-ghost" id="refreshStocks">刷新</button>
-            <button class="btn btn-primary" id="newStockBtn">新增标的</button>
-          </div>
-        </div>
-        <table>
-          <thead><tr>
-            <th>代码</th><th>名称</th><th>板块</th><th>行业</th><th>现价</th>
-            <th>涨跌幅</th><th>涨停</th><th>跌停</th><th>波动率</th><th>β</th><th>操作</th>
-          </tr></thead>
-          <tbody id="stockBody"><tr><td colspan="11" class="empty">加载中…</td></tr></tbody>
-        </table>
-      </div>
-      <div class="panel">
-        <div class="row-between">
-          <h3>指数 <span class="n">由成分股等权合成，不可手工新建</span></h3>
-          <button class="btn btn-ghost" id="refreshIdx">刷新</button>
-        </div>
-        <table>
-          <thead><tr>
-            <th>代码</th><th>名称</th><th>点位</th><th>涨跌幅</th><th>成分</th>
-            <th>上涨</th><th>平盘</th><th>下跌</th><th>成交额</th>
-          </tr></thead>
-          <tbody id="idxBody"><tr><td colspan="9" class="empty">加载中…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- 风险偏好（只读分布，无历史档案） -->
-    <!-- 模拟引擎 -->
-    <section class="page" id="page-engine">
-      <div class="panel">
-        <div class="row-between">
-          <h3>引擎运行态 <span class="n" id="engineModeTag"></span></h3>
-          <div class="row">
-            <button class="btn btn-ghost" id="refreshEngine">刷新</button>
-            <button class="btn btn-ghost" id="resetEngine">重置行情</button>
-            <button class="btn btn-primary" id="toggleEngine">启停</button>
-          </div>
-        </div>
-        <div class="kpis" id="engineKpis"></div>
-        <div class="dist" id="engineSession"></div>
-        <p class="muted" style="font-size:11px; margin:12px 0 0; line-height:1.7;">
-          推进状态取决于「引擎开关」与「交易模式」两者：引擎开着但当前处于集合竞价、
-          午间休市或收盘后时，价格不会继续推进（<b>推进中=否</b>），这是交易模式本身的约束，
-          不是故障。交易模式在「系统配置」页签切换；重置行情只把价格拉回昨收并清空分钟线，
-          不动标的参数、账户资金与持仓。
-        </p>
-      </div>
-      <div class="panel">
-        <h3>引擎参数速览 <span class="n">数值调整请到「系统配置」</span></h3>
-        <div class="dist" id="engineParams"></div>
-      </div>
-    </section>
-
-    <section class="page" id="page-risk">
-      <div class="panel">
-        <div class="row-between">
-          <h3>风险偏好分布 <span class="n">交易账户当前偏好，不保留历史档案</span></h3>
-          <button class="btn btn-ghost" id="refreshRisk">刷新</button>
-        </div>
-        <div class="dist" id="riskDist"></div>
-        <p class="muted" style="font-size:11px; margin:12px 0 0;">
-          等级由服务端按问卷答案复算（满分 30，三等分档）。测评历史记录功能已移除，
-          这里只反映每个账户最后一次测评的结果。
-        </p>
-      </div>
-    </section>
-
-    <!-- 系统配置 -->
-    <section class="page" id="page-config">
-      <div class="panel">
-        <div class="row-between">
-          <h3>运行期配置 <span class="n">改完保存后立即生效，无需重启</span></h3>
-          <div class="row">
-            <button class="btn btn-ghost" id="resetCfg">恢复默认</button>
-            <button class="btn btn-primary" id="saveCfg">保存修改</button>
-          </div>
-        </div>
-        <p class="muted" style="font-size:11px; margin:0 0 12px;">
-          只有白名单内的参数可改（费率、初始资金、行情节奏等）。数据库地址、JWT 密钥这类
-          部署级配置不在其中，避免误改导致服务不可用。
-        </p>
-        <div class="cfg-grid" id="cfgGrid"><div class="empty">加载中…</div></div>
-      </div>
-    </section>
-
-    <!-- 数据初始化 -->
-    <section class="page" id="page-data">
-      <div class="panel">
-        <div class="row-between"><h3>当前数据</h3><button class="btn btn-ghost" id="refreshSeed">刷新</button></div>
-        <div class="dist" id="seedStatus"></div>
-      </div>
-      <div class="panel">
-        <h3>手动注入标准数据集</h3>
-        <p class="muted" style="font-size:11px; margin:0 0 10px;">
-          启动时不再自动写入任何业务数据。下面三项都幂等：重复点击不会产生重复记录，
-          运营改过的标的参数也不会被覆盖。标的是真删除（不留标记），所以删掉的
-          内置默认标的会在下次注入时被重新加回 —— 想彻底不要，删完不要再点注入。
-        </p>
-        <div class="row" style="gap:16px; margin-bottom:12px;">
-          <label class="row" style="gap:6px;"><input type="checkbox" id="seedStocks" checked /> 默认标的</label>
-          <label class="row" style="gap:6px;"><input type="checkbox" id="seedUsers" checked /> 种子账户（零售 / 机构）</label>
-          <label class="row" style="gap:6px;"><input type="checkbox" id="seedHistory" checked /> 历史日线</label>
-        </div>
-        <button class="btn btn-primary" id="seedBtn">执行注入</button>
-      </div>
-    </section>
-
-    <!-- 撮合质量 -->
-    <section class="page" id="page-ops">
-      <div class="panel">
-        <div class="row-between">
-          <h3>撮合质量</h3>
-          <div class="row">
-            <button class="btn btn-ghost" id="refreshOps">刷新</button>
-            <button class="btn btn-ghost" id="settleBtn">日终结转</button>
-          </div>
-        </div>
-        <div class="dist" id="matchKpi"></div>
-      </div>
-      <div class="panel">
-        <h3>成交额 Top 标的</h3>
-        <table>
-          <thead><tr><th>代码</th><th>名称</th><th>成交笔数</th><th>成交额</th><th>成交量</th></tr></thead>
-          <tbody id="matchBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-  </main>
-</div>
-
-<!-- 新建交易账户 -->
-<div class="modal-mask" id="accModal">
-  <form class="modal" id="accForm">
-    <h3 id="accModalTitle">新建账户</h3>
-    <input type="hidden" id="nRole" value="retail" />
-    <div class="field"><label>用户名（登录名）</label><input id="nUsername" required maxlength="40" /></div>
-    <div class="field"><label>昵称</label><input id="nDisplay" maxlength="40" /></div>
-    <div class="field"><label>初始口令（≥6 位）</label><input id="nPassword" type="text" required minlength="6" /></div>
-    <div class="field"><label>初始资金</label><input id="nCash" type="number" step="1000" value="1000000" /></div>
-    <div class="field" id="creditField"><label>授信额度（机构）</label><input id="nCredit" type="number" step="100000" value="0" /></div>
-    <div class="row" style="justify-content:flex-end;">
-      <button class="btn btn-ghost" type="button" id="accCancel">取消</button>
-      <button class="btn btn-primary" type="submit">创建</button>
-    </div>
-  </form>
-</div>
-
-<!-- 新建管理员 -->
-<div class="modal-mask" id="adminModal">
-  <form class="modal" id="adminForm">
-    <h3>新增管理员</h3>
-    <div class="field"><label>账号</label><input id="aUsername" required maxlength="40" /></div>
-    <div class="field"><label>昵称</label><input id="aDisplay" maxlength="40" /></div>
-    <div class="field"><label>口令（≥8 位）</label><input id="aPassword" type="text" required minlength="8" /></div>
-    <div class="row" style="justify-content:flex-end;">
-      <button class="btn btn-ghost" type="button" id="adminCancel">取消</button>
-      <button class="btn btn-primary" type="submit">创建</button>
-    </div>
-  </form>
-</div>
-
-<!-- 新增标的 -->
-<div class="modal-mask" id="stockModal">
-  <form class="modal" id="stockForm">
-    <h3>新增标的</h3>
-    <div class="field"><label>代码（6 位）</label><input id="sCode" required maxlength="12" /></div>
-    <div class="field"><label>名称</label><input id="sName" required maxlength="24" /></div>
-    <div class="field"><label>板块</label>
-      <select id="sBoard"><option>主板</option><option>创业板</option><option>科创板</option><option>北交所</option></select>
-    </div>
-    <div class="field"><label>行业</label><input id="sIndustry" maxlength="24" /></div>
-    <div class="field"><label>基准价</label><input id="sPrice" type="number" step="0.01" value="10" min="0.01" /></div>
-    <div class="field"><label>波动率</label><input id="sVol" type="number" step="0.01" value="0.35" /></div>
-    <div class="row" style="justify-content:flex-end;">
-      <button class="btn btn-ghost" type="button" id="stockCancel">取消</button>
-      <button class="btn btn-primary" type="submit">创建</button>
-    </div>
-  </form>
-</div>
-
-<script>
 /* ================================================================== *
  * 基础工具
  * ================================================================== */
@@ -556,7 +90,9 @@ function enterApp(admin) {
   $('app').style.display = 'block';
   const a = admin || JSON.parse(localStorage.getItem(USER_KEY) || '{}');
   $('who').textContent = (a.display_name || a.username || '') + (a.username ? ' · 管理员' : '');
-  loadOverview();
+  // 登录后回到「上次看的分区」：直接刷新页面时 hash 还在，不该被拉回总览
+  const first = location.hash.replace(/^#/, '');
+  showPage(PAGES[first] ? first : 'overview', false);
 }
 
 function logout() {
@@ -568,27 +104,93 @@ function logout() {
 $('logoutBtn').addEventListener('click', logout);
 
 /* ================================================================== *
- * 页签切换
+ * 抽屉导航
+ *
+ * 为什么把「横向页签」换成「侧边抽屉」：
+ *   十个分区平铺成一行，宽度不够时会挤成两行小字，分组关系也看不出来；
+ *   抽屉是纵向列表，分区天然有上下顺序，窄屏时按需滑出、不占正文宽度。
+ *
+ * 状态只有一个来源 state.tab：菜单高亮、分区显隐、URL hash 都从它派生，
+ * 避免「点了一处、另外两处没跟着变」。
  * ================================================================== */
-$('tabs').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-tab]');
-  if (!b) return;
-  state.tab = b.dataset.tab;
-  [...$('tabs').children].forEach((x) => x.classList.toggle('on', x === b));
-  document.querySelectorAll('section.page').forEach((s) =>
-    s.classList.toggle('on', s.id === 'page-' + state.tab));
-  ({
-    overview: loadOverview,
-    retail: () => loadAccounts('retail'),
-    institution: () => loadAccounts('institution'),
-    admins: loadAdmins,
-    stocks: () => { loadStocks(); loadIndices(); },
-    engine: loadEngine,
-    risk: loadRisk,
-    config: loadConfig,
-    data: loadSeedStatus,
-    ops: loadOps,
-  })[state.tab]?.();
+const PAGES = {
+  overview: loadOverview,
+  retail: () => loadAccounts('retail'),
+  institution: () => loadAccounts('institution'),
+  admins: loadAdmins,
+  stocks: () => { loadStocks(); loadIndices(); },
+  engine: loadEngine,
+  risk: loadRisk,
+  config: loadConfig,
+  data: loadSeedStatus,
+  ops: loadOps,
+};
+
+/** 窄屏判定：与 app.css 的断点保持一致 */
+const isNarrow = () => window.matchMedia('(max-width: 900px)').matches;
+
+function openSide() {
+  $('shell')?.show('start');
+  $('app')?.classList.add('side-open');
+}
+
+function closeSide() {
+  $('shell')?.close('start');
+  $('app')?.classList.remove('side-open');
+}
+
+/**
+ * 切到某个分区。
+ * @param {string} key   分区标识
+ * @param {boolean} sync true 表示用户主动切换，需要同步地址栏 hash；
+ *                       false 表示从 hash 还原，不再写回，避免压出多余历史。
+ */
+function showPage(key, sync = true) {
+  if (!PAGES[key]) key = 'overview';
+  state.tab = key;
+
+  // 菜单高亮：Sober 的 s-menu-item 用 checked 属性表示选中，不是 class
+  document.querySelectorAll('s-menu-item[data-page]').forEach((el) => {
+    if (el.dataset.page === key) el.setAttribute('checked', '');
+    else el.removeAttribute('checked');
+  });
+
+  document.querySelectorAll('section.page').forEach((s) => {
+    s.classList.toggle('on', s.dataset.page === key);
+  });
+
+  // 顶栏标题跟着变；窄屏收起侧栏后，这是唯一能看出「在哪一页」的地方
+  const cur = document.querySelector(`s-menu-item[data-page="${key}"]`);
+  if (cur && $('pageTitle')) $('pageTitle').textContent = cur.textContent.trim();
+
+  if (sync && location.hash !== '#' + key) {
+    // replaceState 而非 pushState：后台是单页工具，浏览器「后退」应留给
+    // 用户自己的导航意图，不该被十次点菜单塞满历史
+    history.replaceState(null, '', '#' + key);
+  }
+
+  // 窄屏侧栏是覆盖层，选完自动收起，否则会一直盖住正文
+  if (isNarrow()) closeSide();
+
+  PAGES[key]?.();
+}
+
+$('navToggle').addEventListener('click', () => {
+  if ($('shell')?.hasAttribute('data-open')) closeSide();
+  else openSide();
+});
+
+// 直接用 click 监听：不同版本的 Sober 自定义事件名不一致，
+// 而 data-page 是唯一真相，比依赖事件名稳
+document.querySelector('s-menu')?.addEventListener('click', (e) => {
+  const item = e.target.closest('s-menu-item[data-page]');
+  if (item) showPage(item.dataset.page);
+});
+
+// 手改地址栏 hash 或用前进后退时跟着切页
+window.addEventListener('hashchange', () => {
+  const key = location.hash.replace(/^#/, '');
+  if (key && key !== state.tab && PAGES[key]) showPage(key, false);
 });
 
 /* ================================================================== *
@@ -1191,6 +793,3 @@ if (token()) {
 } else {
   $('login').style.display = 'grid';
 }
-</script>
-</body>
-</html>

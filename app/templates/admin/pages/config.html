@@ -1,0 +1,18 @@
+<section class="page" id="page-config" data-page="config">
+      <div class="panel">
+        <div class="row-between">
+          <h3>运行期配置 <span class="n">改完保存后立即生效，无需重启</span></h3>
+          <div class="row">
+            <button class="btn btn-ghost" id="resetCfg">恢复默认</button>
+            <button class="btn btn-primary" id="saveCfg">保存修改</button>
+          </div>
+        </div>
+        <p class="muted" style="font-size:11px; margin:0 0 12px;">
+          只有白名单内的参数可改（费率、初始资金、行情节奏等）。数据库地址、JWT 密钥这类
+          部署级配置不在其中，避免误改导致服务不可用。
+        </p>
+        <div class="cfg-grid" id="cfgGrid"><div class="empty">加载中…</div></div>
+      </div>
+    </section>
+
+    <!-- 数据初始化 -->

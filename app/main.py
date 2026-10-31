@@ -18,8 +18,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from .bootstrap import bootstrap, start_engine, stop_engine
 from .config import settings
@@ -90,10 +91,42 @@ async def unhandled(request: Request, exc: Exception):  # pragma: no cover
     )
 
 
-# 运营后台面板（单页应用，纯静态，调用 /api/admin/*）
-_STATIC_ADMIN = Path(__file__).resolve().parent / "static" / "admin"
-if _STATIC_ADMIN.is_dir():
-    app.mount("/admin", StaticFiles(directory=str(_STATIC_ADMIN), html=True), name="admin")
+# 运营后台：Jinja2 服务端渲染
+#
+# 为什么从「一个 1196 行的静态 HTML」改成模板：
+#   十个分区挤在同一个文件里，改一页要在上千行里找锚点，还容易误伤别的分区；
+#   拆成 base + 每页一个模板之后，分区边界由文件系统体现，
+#   导航清单只写一处，增删分区不必再同步 HTML 与 JS 两个地方。
+_TEMPLATES = Path(__file__).resolve().parent / "templates"
+templates = Jinja2Templates(directory=str(_TEMPLATES))
+
+# 侧边导航清单：顺序即菜单顺序，key 同时是模板文件名与 URL hash
+ADMIN_NAV = [
+    {"key": "overview", "label": "总览"},
+    {"key": "retail", "label": "零售账户"},
+    {"key": "institution", "label": "机构账户"},
+    {"key": "admins", "label": "管理员"},
+    {"key": "stocks", "label": "标的与指数"},
+    {"key": "engine", "label": "模拟引擎"},
+    {"key": "risk", "label": "风险偏好"},
+    {"key": "config", "label": "系统配置"},
+    {"key": "data", "label": "数据初始化"},
+    {"key": "ops", "label": "撮合质量"},
+]
+
+# 后台自己的 css/js 与 vendor 的 Sober UI 都从 /static 出
+_STATIC = Path(__file__).resolve().parent / "static"
+if _STATIC.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_panel(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "admin/index.html",
+        {"nav": ADMIN_NAV, "version": settings.app_version},
+    )
 
 app.include_router(auth.router)
 app.include_router(market.router)

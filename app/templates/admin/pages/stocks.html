@@ -1,0 +1,34 @@
+<section class="page" id="page-stocks" data-page="stocks">
+      <div class="panel">
+        <div class="row-between">
+          <h3>标的 <span class="n" id="stockCount"></span></h3>
+          <div class="row">
+            <button class="btn btn-ghost" id="refreshStocks">刷新</button>
+            <button class="btn btn-primary" id="newStockBtn">新增标的</button>
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>代码</th><th>名称</th><th>板块</th><th>行业</th><th>现价</th>
+            <th>涨跌幅</th><th>涨停</th><th>跌停</th><th>波动率</th><th>β</th><th>操作</th>
+          </tr></thead>
+          <tbody id="stockBody"><tr><td colspan="11" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <div class="row-between">
+          <h3>指数 <span class="n">由成分股等权合成，不可手工新建</span></h3>
+          <button class="btn btn-ghost" id="refreshIdx">刷新</button>
+        </div>
+        <table>
+          <thead><tr>
+            <th>代码</th><th>名称</th><th>点位</th><th>涨跌幅</th><th>成分</th>
+            <th>上涨</th><th>平盘</th><th>下跌</th><th>成交额</th>
+          </tr></thead>
+          <tbody id="idxBody"><tr><td colspan="9" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 风险偏好（只读分布，无历史档案） -->
+    <!-- 模拟引擎 -->

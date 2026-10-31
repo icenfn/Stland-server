@@ -1,0 +1,15 @@
+<!-- 登录 -->
+<div id="login">
+  <form class="login-card" id="loginForm">
+    <h1>Stland 运营后台</h1>
+    <div class="sub">管理员独立账号，与交易账户互不相通</div>
+    <div class="field"><label>管理员账号</label><input id="username" autocomplete="username" required /></div>
+    <div class="field"><label>口令</label><input id="password" type="password" autocomplete="current-password" required /></div>
+    <div class="field"><button class="btn btn-primary btn-block" id="loginBtn" type="submit">登录</button></div>
+    <div id="loginErr" class="banner err" style="position:static; transform:none; opacity:0; display:block; margin-top:4px;"></div>
+    <p class="muted" style="font-size:10px; margin:10px 0 0; line-height:1.6;">
+      首次部署时系统会自动创建引导管理员（默认 admin / stland-admin），
+      登录后请立即在「账户」页签修改口令。
+    </p>
+  </form>
+</div>
