@@ -284,7 +284,7 @@
     institution: function () { return loadAccounts('institution'); },
     admins: loadAdmins,
     stocks: function () { return Promise.all([loadStocks(), loadIndices()]); },
-    engine: loadEngine,
+    engine: function () { return Promise.all([loadEngine(), loadConfig('engine')]); },
     risk: loadRisk,
     config: loadConfig,
     data: loadSeedStatus,
@@ -785,8 +785,14 @@
       (c.kind === 'int' ? '1' : 'any') + '" value="' + esc(String(c.value)) + '" />';
   }
 
-  function loadConfig() {
-    var grid = $('cfgGrid');
+  function loadConfig(page) {
+    // 按归属页面渲染：系统配置页只显示 system 项，模拟引擎页只显示 engine 项。
+    // 值仍来自同一份 /api/admin/settings，保存逻辑也共用，只有展示位置不同。
+    var isEngine = page === 'engine';
+    var grid = $(isEngine ? 'engineCfgGrid' : 'cfgGrid');
+    if (!grid) return Promise.resolve();
+    var want = isEngine ? 'engine' : 'system';
+    var grid = grid;
     grid.innerHTML = '<div class="app-loading">加载中…</div>';
     return api('/api/admin/settings').then(function (d) {
       state.cfg = d.items || [];
@@ -1000,6 +1006,10 @@
     /* 配置 */
     $('refreshCfg').addEventListener('click', loadConfig);
     $('saveCfg').addEventListener('click', saveConfig);
+  var _saveEngineCfg = $('saveEngineCfg');
+  if (_saveEngineCfg) _saveEngineCfg.addEventListener('click', saveConfig);
+  var _resetEngineCfg = $('resetEngineCfg');
+  if (_resetEngineCfg) _resetEngineCfg.addEventListener('click', resetConfig);
     $('resetCfg').addEventListener('click', resetConfig);
 
     /* 数据 */

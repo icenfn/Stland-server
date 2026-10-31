@@ -84,6 +84,13 @@ class User(SQLModel, table=True):
     realized_pnl: float = Field(default=0.0)    # 已实现盈亏
     fee_paid: float = Field(default=0.0)        # 累计费用
 
+    # 佣金条件（逐账户可配）
+    # None 表示「跟随角色默认」：零售万3不免5、机构万3免5（见 services/fees.py）。
+    # 为什么拆成两个字段：「费率」与「最低佣金」是两个独立维度 —— 小额委托时
+    # 零售会被 5 元下限抬高实际成本，机构不会；只存费率无法表达「免不免 5」。
+    commission_rate: Optional[float] = Field(default=None)
+    commission_min: Optional[float] = Field(default=None)
+
     # 机构账户专有额度（零售恒为 0）
     credit_limit: float = Field(default=0.0)
 

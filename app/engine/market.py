@@ -517,7 +517,7 @@ class MarketEngine:
         with self._lock:
             change = round(self._index_value - self._index_prev_close, 2)
             return {
-                "code": "SK000001",
+                "code": "SL000001",
                 "name": "股岛综合指数",
                 "price": self._index_value,
                 "prev_close": self._index_prev_close,

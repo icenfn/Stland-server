@@ -48,6 +48,11 @@ class Spec:
     # 选项的展示名（value -> 中文标签）。为空时后台直接显示 value，
     # 交易模式这种「存 a_share、显示 A股」的项必须给标签，否则运营看不懂下拉框
     choice_labels: tuple[tuple[str, str], ...] = ()
+    # 归属的后台页面：system=系统配置、engine=模拟引擎。
+    # 为什么分页：这些参数的控制对象不同 —— 「佣金/印花税/初始资金」是账户与
+    # 结算规则，「波动率/漂移/引擎开关/推进间隔」直接决定模拟引擎怎么跑。
+    # 放在同一页会让运营在调行情时反复滚动去找，也容易改错对象。
+    page: str = "system"
 
     def coerce(self, raw: Any) -> Any:
         """把前端传来的字符串/数字规范成目标类型，越界抛 ValueError。"""
@@ -115,6 +120,7 @@ RUNTIME_SPECS: dict[str, Spec] = {
     "tick_seconds": Spec(
         "tick_seconds", "行情推进间隔", "float", 1.0,
         minimum=0.2, maximum=60.0, unit="秒", note="越小行情跳动越快，CPU 占用也越高",
+        page="engine",
     ),
     "trade_mode": Spec(
         "trade_mode", "交易模式", "choice", "a_share",
@@ -130,22 +136,21 @@ RUNTIME_SPECS: dict[str, Spec] = {
         "market_volatility", "市场波动率系数", "float", 1.0,
         minimum=0.1, maximum=5.0,
         note="1.0 为基准；调大行情更活跃，调小更平稳（影响模拟引擎随机游走幅度）",
+        page="engine",
     ),
     "market_drift": Spec(
         "market_drift", "市场漂移系数", "float", 1.0,
         minimum=-3.0, maximum=3.0,
         note=">0 长期偏多，<0 长期偏空；0 表示无系统性方向",
+        page="engine",
     ),
     "engine_enabled": Spec(
         "engine_enabled", "行情引擎开关", "bool", True, note="关闭后行情冻结，便于排查问题",
+        page="engine",
     ),
     "signature_required": Spec(
         "signature_required", "请求签名校验", "bool", True,
         note="关闭后不再校验 HMAC 签名，仅建议联调期临时关闭",
-    ),
-    "history_days": Spec(
-        "history_days", "历史日线回填天数", "int", 240,
-        minimum=30, maximum=720, unit="天", note="初始化数据时回填多少根日线",
     ),
     "login_fail_limit": Spec(
         "login_fail_limit", "登录失败锁定阈值", "int", 8,
@@ -204,6 +209,7 @@ def snapshot() -> list[dict]:
                 "choice_labels": [{"value": v, "label": t} for v, t in spec.choice_labels],
                 "unit": spec.unit,
                 "note": spec.note,
+                "page": spec.page,
             }
         )
     return items

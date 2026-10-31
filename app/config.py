@@ -52,7 +52,6 @@ class Settings:
         # 兼容旧属性名，避免第三方脚本直接读 settings.session_mode 时报错
         self.session_mode: str = self.trade_mode
         self.force_open: bool = _bool("STLAND_FORCE_OPEN", False)
-        self.history_days: int = int(os.getenv("STLAND_HISTORY_DAYS", "240"))
         self.engine_enabled: bool = _bool("STLAND_ENGINE_ENABLED", True)
 
 

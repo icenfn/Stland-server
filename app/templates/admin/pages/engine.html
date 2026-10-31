@@ -13,13 +13,28 @@
 
   <div class="mdui-card app-card">
     <div class="app-card-head">
+      <div class="app-card-title">引擎参数</div>
+      <div class="app-card-actions">
+        <button class="mdui-btn mdui-ripple" id="resetEngineCfg">恢复默认</button>
+        <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="saveEngineCfg">保存修改</button>
+      </div>
+    </div>
+    <div class="app-card-body">
+      <!-- 波动率 / 漂移 / 引擎开关 / 推进间隔：控制的是引擎怎么跑，
+           放到这里与「引擎状态」同页，调参时不必来回切页 -->
+      <div class="app-cfg-grid" id="engineCfgGrid"></div>
+    </div>
+  </div>
+
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
       <div class="app-card-title">说明</div>
     </div>
     <div class="app-card-body">
       <ul class="mdui-typo">
         <li>关闭引擎后价格冻结，账户、持仓与撮合数据都不受影响。</li>
         <li>重置行情只把价格推回昨收并清空分钟线与累计成交，不改标的参数。</li>
-        <li>推进间隔、涨跌波动等参数在「系统配置」里调整。</li>
+        <li>推进间隔、市场波动率与漂移系数就在本页「引擎参数」中调整。</li>
       </ul>
     </div>
   </div>

@@ -24,6 +24,12 @@ from .models import Admin, DailyBar, Role, Stock, User
 from .security import hash_password
 from .services.trading import rematch_pending, settle_all
 
+# 初始化时回填的日线根数（约一年交易日）。
+# 以前这里是可配置项 `settings.history_days`，但它只在「数据初始化」这一次被读到，
+# 属于一次性的建库参数，不是运营会反复调的旋钮 —— 放在系统配置页里反而让人以为
+# 改完能影响既有数据。改为常量后语义清楚：只决定新建库时补多少历史。
+SEED_DAILY_BARS = 240
+
 logger = logging.getLogger("stland.bootstrap")
 
 
@@ -140,7 +146,7 @@ def ensure_history(session: Session) -> int:
     for stock in session.exec(select(Stock)).all():
         if stock.code in have:
             continue
-        bars = market_engine.backfill_daily(stock.code, settings.history_days)
+        bars = market_engine.backfill_daily(stock.code, SEED_DAILY_BARS)
         for b in bars:
             session.add(DailyBar(**b))
         added += len(bars)

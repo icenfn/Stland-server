@@ -32,7 +32,7 @@ from ..models import (
     Trade,
     User,
 )
-from .fees import calc_fee, round_money
+from .fees import calc_fee, max_buy_quantity, resolve_commission, round_money
 
 
 class TradeError(Exception):
@@ -146,7 +146,7 @@ def place_order(
     frozen_amount = 0.0
     if side_enum == OrderSide.BUY:
         need = price * quantity
-        fee_est = calc_fee(need, "buy").total
+        fee_est = calc_fee(need, "buy", *resolve_commission(user)).total
         available_cash = user.cash + (user.credit_limit if user.role.value == "institution" else 0.0)
         if need + fee_est > available_cash + 1e-6:
             raise TradeError(
@@ -230,7 +230,7 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
 
     for fill in fills:
         amount = fill.price * fill.quantity
-        fee = calc_fee(amount, order.side.value)
+        fee = calc_fee(amount, order.side.value, *resolve_commission(user))
         total_amount += amount
         total_fee += fee.commission
         total_tax += fee.stamp_tax
@@ -309,7 +309,7 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             # 限价单还有剩余：这部分继续挂着，冻结资金必须留在冻结池里
             remain_qty = order.quantity - order.filled_quantity
             remain_amt = order.price * remain_qty
-            keep_frozen = round_money(remain_amt + calc_fee(remain_amt, "buy").total)
+            keep_frozen = round_money(remain_amt + calc_fee(remain_amt, "buy", *resolve_commission(user)).total)
 
     session.add(order)
     _release_freeze(session, user, order, stock, total_amount + total_fee + total_tax + total_transfer, keep_frozen)
