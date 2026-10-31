@@ -3,15 +3,16 @@
 {% include "admin/login.html" %}
 
 <div id="app" hidden>
-  {# mdui-layout 负责整体排布：顶栏 + 抽屉 + 主内容区，全部由组件自带样式完成 #}
-  <mdui-layout>
+  {# mdui-layout + full-height：让顶栏、抽屉、内容区正好占满一屏，
+     内容区自己滚动，避免整页越滚越长导致高度异常 #}
+  <mdui-layout full-height>
     <mdui-top-app-bar>
       <mdui-button-icon icon="menu" id="navToggle" aria-label="打开导航"></mdui-button-icon>
       <mdui-top-app-bar-title>Stland 运营后台</mdui-top-app-bar-title>
       <div style="flex-grow: 1"></div>
-      <span id="pageTitle" style="opacity: .7; margin-right: 8px">{{ nav[0].label }}</span>
-      <span id="who" style="opacity: .7; margin-right: 8px"></span>
-      <mdui-button variant="text" id="logoutBtn">退出</mdui-button>
+      <span id="pageTitle"></span>
+      <span id="who" style="opacity: .7; margin: 0 12px"></span>
+      <mdui-button-icon icon="logout" id="logoutBtn" aria-label="退出登录"></mdui-button-icon>
     </mdui-top-app-bar>
 
     {# 抽屉导航：宽屏常驻侧栏，窄屏点菜单键滑出；选中态用 active 属性 #}
@@ -19,6 +20,7 @@
       <mdui-list>
         {% for item in nav %}
         <mdui-list-item data-page="{{ item.key }}"{% if loop.first %} active{% endif %} rounded>
+          <mdui-icon slot="icon" name="{{ item.icon }}"></mdui-icon>
           {{ item.label }}
         </mdui-list-item>
         {% endfor %}

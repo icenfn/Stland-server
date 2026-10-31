@@ -101,20 +101,21 @@ _TEMPLATES = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES))
 
 # 侧边导航清单：顺序即菜单顺序，key 同时是模板文件名与 URL hash
+# icon 取 Material Icons 的 ligature 名，由 base.html 引入的字体渲染
 ADMIN_NAV = [
-    {"key": "overview", "label": "总览"},
-    {"key": "retail", "label": "零售账户"},
-    {"key": "institution", "label": "机构账户"},
-    {"key": "admins", "label": "管理员"},
-    {"key": "stocks", "label": "标的与指数"},
-    {"key": "engine", "label": "模拟引擎"},
-    {"key": "risk", "label": "风险偏好"},
-    {"key": "config", "label": "系统配置"},
-    {"key": "data", "label": "数据初始化"},
-    {"key": "ops", "label": "撮合质量"},
+    {"key": "overview", "label": "总览", "icon": "dashboard"},
+    {"key": "retail", "label": "零售账户", "icon": "person"},
+    {"key": "institution", "label": "机构账户", "icon": "business"},
+    {"key": "admins", "label": "管理员", "icon": "admin_panel_settings"},
+    {"key": "stocks", "label": "标的与指数", "icon": "candlestick_chart"},
+    {"key": "engine", "label": "模拟引擎", "icon": "settings_suggest"},
+    {"key": "risk", "label": "风险偏好", "icon": "shield"},
+    {"key": "config", "label": "系统配置", "icon": "tune"},
+    {"key": "data", "label": "数据初始化", "icon": "database"},
+    {"key": "ops", "label": "撮合质量", "icon": "swap_horiz"},
 ]
 
-# 后台自己的 css/js 与 vendor 的 Sober UI 都从 /static 出
+# 后台自己的 css/js 与 mdui、Material Icons 字体都从 /static 出
 _STATIC = Path(__file__).resolve().parent / "static"
 if _STATIC.is_dir():
     app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")

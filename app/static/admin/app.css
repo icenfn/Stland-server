@@ -1,12 +1,21 @@
 /* ==================================================================
- * 这里只放「页面切换」和「区块间距」两类结构样式，
- * 组件外观（颜色、圆角、阴影、按钮、表格、输入框……）全部由 mdui 自带，
- * 不再重写任何视觉规则。
+ * 这里只放「页面切换」「区块间距」「表格皮肤」三类结构性样式，
+ * 颜色一律引用 mdui 自带的设计令牌（--mdui-color-*），
+ * 不写死任何配色，保证跟 mdui 主题（含深色模式）完全一致。
  * ================================================================== */
+
+/* mdui-layout 的 full-height 依赖父级高度，这里把根节点撑满 */
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
 
 /* 十个分区同页共存，靠 .on 控制显隐，切换时不重建 DOM、不丢已填内容 */
 .page {
   display: none;
+  padding: 16px;
+  max-width: 1280px;
 }
 .page.on {
   display: block;
@@ -18,27 +27,6 @@
 }
 .stack > * + * {
   margin-top: 12px;
-}
-
-/* 页面两侧留出呼吸空间，窄屏自动收窄 */
-.page {
-  padding: 16px;
-  max-width: 1280px;
-}
-
-/* mdui 没有表格组件，表格用原生 table + mdui 自带的 .mdui-table 皮肤；
-   这里只补两处对齐，不涉及配色与边框 */
-.mdui-table {
-  width: 100%;
-}
-.mdui-table th.num,
-.mdui-table td.num {
-  text-align: right;
-}
-
-/* 表格在窄屏可横向滚动，避免挤压变形 */
-.table-wrap {
-  overflow-x: auto;
 }
 
 /* 顶部工具栏：把按钮排成一行并允许换行 */
@@ -54,4 +42,69 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 12px;
+}
+
+/* ------------------------------------------------------------------
+ * 表格皮肤
+ * mdui 2 没有表格组件（组件清单里只有 list/collapse 等，没有 table），
+ * 所以这里用原生 table，配色与边框全部取 mdui 令牌，
+ * 视觉上跟 mdui-card / mdui-list 保持一致。
+ * ------------------------------------------------------------------ */
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--mdui-shape-corner-medium, 12px);
+  border: 1px solid rgb(var(--mdui-color-outline-variant, 202 196 208));
+}
+
+table.mdui-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  color: rgb(var(--mdui-color-on-surface, 28 27 32));
+  background: rgb(var(--mdui-color-surface, 255 255 255));
+}
+
+table.mdui-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 500;
+  white-space: nowrap;
+  color: rgb(var(--mdui-color-on-surface-variant, 73 69 79));
+  background: rgb(var(--mdui-color-surface-container, 247 242 250));
+  border-bottom: 1px solid rgb(var(--mdui-color-outline-variant, 202 196 208));
+}
+
+table.mdui-table tbody td {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgb(var(--mdui-color-outline-variant, 202 196 208));
+  vertical-align: middle;
+}
+
+/* 最后一行不画分隔线，避免和容器圆角贴出双层线 */
+table.mdui-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* 悬停高亮，用 mdui 的 surface-container-high 令牌 */
+table.mdui-table tbody tr:hover {
+  background: rgb(var(--mdui-color-surface-container-high, 236 230 240));
+}
+
+/* 数字列右对齐，金额/百分比更好比对 */
+table.mdui-table th.num,
+table.mdui-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 行内操作按钮之间留 4px，不换行挤压 */
+table.mdui-table td mdui-button {
+  margin-right: 4px;
+  white-space: nowrap;
+}
+table.mdui-table td mdui-button:last-child {
+  margin-right: 0;
 }

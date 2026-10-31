@@ -145,6 +145,8 @@ function enterApp(admin) {
   $('app').hidden = false;
   const a = admin || JSON.parse(localStorage.getItem(USER_KEY) || '{}');
   $('who').textContent = a.display_name || a.username || '';
+  // 宽屏抽屉默认常驻展开，窄屏收起等点菜单键；否则大屏左边会空一块
+  navEl().open = !window.matchMedia('(max-width: 900px)').matches;
   // 刷新页面时 hash 还在，就该停在上次看的分区，而不是被拉回总览
   const first = location.hash.replace(/^#/, '');
   showPage(PAGES[first] ? first : 'overview', false);
