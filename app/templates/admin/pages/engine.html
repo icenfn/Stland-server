@@ -1,13 +1,13 @@
 {# 模拟引擎 #}
 <section class="page" id="page-engine">
   <div class="toolbar">
-    <mdui-button variant="filled" id="toggleEngine">启停引擎</mdui-button>
-    <mdui-button variant="tonal" icon="restart_alt" id="resetEngine">重置行情</mdui-button>
-    <mdui-button variant="text" icon="refresh" id="refreshEngine">刷新</mdui-button>
+    <button class="mdui-btn mdui-ripple mdui-btn-raised mdui-color-theme-accent" id="toggleEngine">启停引擎</button>
+    <button class="mdui-btn mdui-ripple mdui-btn-raised" id="resetEngine"><i class="mdui-icon material-icons">restart_alt</i>重置行情</button>
+    <button class="mdui-btn mdui-ripple" id="refreshEngine"><i class="mdui-icon material-icons">refresh</i>刷新</button>
   </div>
 
-  <mdui-card style="padding: 16px">
-    <div style="font-weight: 600; margin-bottom: 12px">引擎状态与参数</div>
+  <div class="mdui-card"><div class="mdui-card-content">
+    <div class="mdui-typo-title">引擎状态与参数</div>
     <div class="kpi-grid" id="engineKpis"></div>
-  </mdui-card>
+  </div></div>
 </section>

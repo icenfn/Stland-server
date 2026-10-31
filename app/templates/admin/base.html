@@ -5,18 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>{% block title %}Stland 运营后台{% endblock %}</title>
 
-  {# mdui 2：自带 Material 3 设计令牌与全部组件样式，后台不再自定义任何外观 #}
-  <link rel="stylesheet" href="/static/vendor/mdui/mdui.css" />
-  {# mdui 的 icon 属性靠 Material Icons 字体的 ligature 渲染，字体必须单独引入，
-     否则 icon="menu" 会原样显示成文字 "menu" #}
-  <link rel="stylesheet" href="/static/vendor/material-icons/material-icons.css" />
+  {# mdui 1.x：自带完整组件样式（含表格），且内置 Material Icons 图标字体，
+     不需要再单独引入任何字体或图片资源 #}
+  <link rel="stylesheet" href="/static/vendor/mdui/css/mdui.min.css" />
+  {# 这里只放分区显隐、间距、指标网格这类结构性样式，不写任何配色与外观 #}
   <link rel="stylesheet" href="/static/admin/app.css" />
 </head>
 <body>
 {% block body %}{% endblock %}
 
-{# mdui.global.js 会自动注册全部 web components，并把 alert/confirm/prompt/snackbar 挂到 window.mdui #}
-<script src="/static/vendor/mdui/mdui.global.js"></script>
+<script src="/static/vendor/mdui/js/mdui.min.js"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

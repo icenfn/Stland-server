@@ -1,18 +1,18 @@
 {# 撮合质量 #}
 <section class="page" id="page-ops">
   <div class="toolbar">
-    <mdui-button variant="tonal" icon="refresh" id="refreshOps">刷新</mdui-button>
-    <mdui-button variant="filled" id="settleBtn">执行日终结转</mdui-button>
+    <button class="mdui-btn mdui-ripple mdui-btn-raised" id="refreshOps"><i class="mdui-icon material-icons">refresh</i>刷新</button>
+    <button class="mdui-btn mdui-ripple mdui-btn-raised mdui-color-theme-accent" id="settleBtn">执行日终结转</button>
   </div>
 
-  <mdui-card style="padding: 16px">
-    <div style="font-weight: 600; margin-bottom: 12px">撮合指标</div>
+  <div class="mdui-card"><div class="mdui-card-content">
+    <div class="mdui-typo-title">撮合指标</div>
     <div class="kpi-grid" id="matchKpi"></div>
-  </mdui-card>
+  </div></div>
 
-  <mdui-card style="padding: 16px">
-    <div style="font-weight: 600; margin-bottom: 12px">成交最活跃标的</div>
-    <div class="table-wrap">
+  <div class="mdui-card"><div class="mdui-card-content">
+    <div class="mdui-typo-title">成交最活跃标的</div>
+    <div class="mdui-table-fluid">
       <table class="mdui-table">
         <thead>
           <tr><th>代码</th><th>名称</th><th class="num">成交笔数</th><th class="num">成交额</th><th class="num">成交量</th></tr>
@@ -20,5 +20,5 @@
         <tbody id="matchBody"></tbody>
       </table>
     </div>
-  </mdui-card>
+  </div></div>
 </section>

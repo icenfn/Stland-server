@@ -61,15 +61,19 @@ function notify(text) {
 }
 
 /** 确认框：mdui.confirm 返回 Promise，原生 confirm 是同步值，这里统一成 Promise<boolean> */
-function ask(text, headline = '请确认') {
+function ask(text, title = '请确认') {
   try {
     if (window.mdui && typeof mdui.confirm === 'function') {
-      return Promise.resolve(mdui.confirm({
-        headline,
-        description: String(text),
-        confirmText: '确定',
-        cancelText: '取消',
-      })).then((v) => !!v).catch(() => false);
+      // mdui 1.x 的 confirm 是回调式：confirm(text, title, onConfirm, onCancel, options)
+      return new Promise((resolve) => {
+        mdui.confirm(
+          String(text),
+          title,
+          () => resolve(true),
+          () => resolve(false),
+          { confirmText: '确定', cancelText: '取消' },
+        );
+      });
     }
   } catch { /* 落到兜底 */ }
   return Promise.resolve(window.confirm(String(text)));
@@ -99,14 +103,14 @@ const ROLE_LABEL = { retail: '零售', institution: '机构' };
 
 /** 指标小卡：mdui-card 承载，样式全部来自组件 */
 const kpiCard = (label, value) => `
-  <mdui-card style="padding:12px">
-    <div style="font-size:12px; opacity:.7">${esc(label)}</div>
-    <div style="font-size:18px; font-weight:600; margin-top:4px">${esc(value ?? '--')}</div>
-  </mdui-card>`;
+  <div class="mdui-card kpi">
+    <div class="kpi-label">${esc(label)}</div>
+    <div class="kpi-value">${esc(value ?? '--')}</div>
+  </div>`;
 
 /** 表格里的行内操作按钮 */
 const rowBtn = (text, attr, extra = '', danger = false) =>
-  `<mdui-button variant="text" ${danger ? 'style="--mdui-color-primary: var(--mdui-color-error)"' : ''} ${attr} ${extra}>${esc(text)}</mdui-button>`;
+  `<button class="mdui-btn mdui-ripple row-btn${danger ? ' row-btn-danger' : ''}" ${attr} ${extra}>${esc(text)}</button>`;
 
 /** 空态/加载态占位行 */
 const emptyRow = (cols, text) =>
@@ -146,7 +150,7 @@ function enterApp(admin) {
   const a = admin || JSON.parse(localStorage.getItem(USER_KEY) || '{}');
   $('who').textContent = a.display_name || a.username || '';
   // 宽屏抽屉默认常驻展开，窄屏收起等点菜单键；否则大屏左边会空一块
-  navEl().open = !window.matchMedia('(max-width: 900px)').matches;
+  if (isNarrow()) drawer.close(); else drawer.open();
   // 刷新页面时 hash 还在，就该停在上次看的分区，而不是被拉回总览
   const first = location.hash.replace(/^#/, '');
   showPage(PAGES[first] ? first : 'overview', false);
@@ -191,6 +195,19 @@ const PAGE_TITLE = {
 
 const navEl = () => $('nav');
 
+/**
+ * mdui 1.x 的组件是「先 new 出实例再调方法」，
+ * 不像 2.x 那样直接改元素的属性。这里统一包一层，
+ * 页面代码只表达「打开/关闭」，不关心底层怎么实现。
+ */
+const drawer = new mdui.Drawer('#nav');
+const dialogs = {};
+function dlg(id) {
+  if (!dialogs[id]) dialogs[id] = new mdui.Dialog('#' + id);
+  return dialogs[id];
+}
+const isNarrow = () => window.matchMedia('(max-width: 1023px)').matches;
+
 function showPage(key, syncHash = true) {
   if (!PAGES[key]) key = 'overview';
   state.page = key;
@@ -198,28 +215,25 @@ function showPage(key, syncHash = true) {
   document.querySelectorAll('.page').forEach((el) => {
     el.classList.toggle('on', el.id === 'page-' + key);
   });
-  navEl().querySelectorAll('mdui-list-item').forEach((el) => {
-    el.active = el.dataset.page === key;
+  navEl().querySelectorAll('.nav-item').forEach((el) => {
+    el.classList.toggle('mdui-list-item-active', el.dataset.page === key);
   });
   $('pageTitle').textContent = PAGE_TITLE[key] || '';
 
   // 窄屏点完就收起抽屉；宽屏保持常驻侧栏
-  if (window.matchMedia('(max-width: 900px)').matches) navEl().open = false;
+  if (isNarrow()) drawer.close();
 
   if (syncHash) history.replaceState(null, '', '#' + key);
   PAGES[key]();
 }
 
 navEl().addEventListener('click', (e) => {
-  const item = e.target.closest('mdui-list-item');
+  const item = e.target.closest('.nav-item');
   if (!item || !item.dataset.page) return;
   showPage(item.dataset.page);
 });
 
-$('navToggle').addEventListener('click', () => {
-  const n = navEl();
-  n.open = !n.open;
-});
+$('navToggle').addEventListener('click', () => drawer.toggle());
 
 window.addEventListener('hashchange', () => {
   const key = location.hash.replace(/^#/, '');
@@ -317,14 +331,14 @@ $('refreshInstitution').addEventListener('click', () => loadAccounts('institutio
 
 /* 行内操作统一用事件委托：表格是整块重绘的，逐个绑定会被冲掉 */
 document.addEventListener('click', async (e) => {
-  const btn = e.target.closest('mdui-button');
+  const btn = e.target.closest('.row-btn');
   if (!btn) return;
   const ds = btn.dataset || {};
 
   if (ds.fund) {
     state.adjustAccount = ds.fund;
     $('ajCash').value = '';
-    $('dlgAdjust').open = true;
+    dlg('dlgAdjust').open();
     return;
   }
   if (ds.pwd) {
@@ -387,7 +401,7 @@ document.addEventListener('click', async (e) => {
     $('stPrevClose').value = s.prev_close ?? '';
     $('stLimitUp').value = s.limit_up ?? '';
     $('stLimitDown').value = s.limit_down ?? '';
-    $('dlgStock').open = true;
+    dlg('dlgStock').open();
   }
 });
 
@@ -401,10 +415,10 @@ function openAccountDialog(role) {
   $('acCash').value = role === 'institution' ? '50000000' : '1000000';
   $('acPassword').value = '';
   $('acRole').value = role;
-  $('dlgAccount').open = true;
+  dlg('dlgAccount').open();
 }
 
-$('acCancel').addEventListener('click', () => { $('dlgAccount').open = false; });
+$('acCancel').addEventListener('click', () => { dlg('dlgAccount').close(); });
 
 $('acSubmit').addEventListener('click', async () => {
   const payload = {
@@ -418,14 +432,14 @@ $('acSubmit').addEventListener('click', async () => {
   if (payload.password.length < 8) { notify('口令至少 8 位'); return; }
   try {
     await api('/api/admin/accounts', { method: 'POST', body: JSON.stringify(payload) });
-    $('dlgAccount').open = false;
+    dlg('dlgAccount').close();
     notify('账户已创建');
     loadAccounts(payload.role === 'institution' ? 'institution' : 'retail');
   } catch (e) { notify(e.message); }
 });
 
 /* 调整可用资金 */
-$('ajCancel').addEventListener('click', () => { $('dlgAdjust').open = false; });
+$('ajCancel').addEventListener('click', () => { dlg('dlgAdjust').close(); });
 
 $('ajSubmit').addEventListener('click', async () => {
   const cash = Number($('ajCash').value);
@@ -434,7 +448,7 @@ $('ajSubmit').addEventListener('click', async () => {
     await api(`/api/admin/accounts/${state.adjustAccount}/funding`, {
       method: 'PUT', body: JSON.stringify({ cash }),
     });
-    $('dlgAdjust').open = false;
+    dlg('dlgAdjust').close();
     notify('资金已调整');
     loadAccounts(state.page);
   } catch (e) { notify(e.message); }
@@ -470,9 +484,9 @@ $('addAdmin').addEventListener('click', () => {
   $('adUsername').value = '';
   $('adDisplay').value = '';
   $('adPassword').value = '';
-  $('dlgAdmin').open = true;
+  dlg('dlgAdmin').open();
 });
-$('adCancel').addEventListener('click', () => { $('dlgAdmin').open = false; });
+$('adCancel').addEventListener('click', () => { dlg('dlgAdmin').close(); });
 
 $('adSubmit').addEventListener('click', async () => {
   const payload = {
@@ -484,7 +498,7 @@ $('adSubmit').addEventListener('click', async () => {
   if (payload.password.length < 8) { notify('口令至少 8 位'); return; }
   try {
     await api('/api/admin/admins', { method: 'POST', body: JSON.stringify(payload) });
-    $('dlgAdmin').open = false;
+    dlg('dlgAdmin').close();
     notify('管理员已创建');
     loadAdmins();
   } catch (e) { notify(e.message); }
@@ -548,9 +562,8 @@ $('addStock').addEventListener('click', () => {
   state.editStock = null;
   ['stCode', 'stName', 'stBoard', 'stIndustry', 'stPrevClose', 'stLimitUp', 'stLimitDown']
     .forEach((id) => { $(id).value = ''; });
-  $('dlgStock').open = true;
+  dlg('dlgStock').open();
 });
-$('stCancel').addEventListener('click', () => { $('dlgStock').open = false; });
 
 $('stSubmit').addEventListener('click', async () => {
   const code = $('stCode').value.trim();
@@ -570,7 +583,7 @@ $('stSubmit').addEventListener('click', async () => {
       method: state.editStock ? 'PUT' : 'POST',
       body: JSON.stringify(payload),
     });
-    $('dlgStock').open = false;
+    dlg('dlgStock').close();
     notify('已保存');
     loadStocks();
   } catch (e) { notify(e.message); }
@@ -679,37 +692,37 @@ async function loadConfig() {
     grid.innerHTML = state.cfg.map((c) => {
       let control = '';
       if (c.kind === 'bool') {
-        control = `<mdui-select data-cfg="${c.key}" value="${c.value ? 'true' : 'false'}">
-          <mdui-menu-item value="true">开启</mdui-menu-item>
-          <mdui-menu-item value="false">关闭</mdui-menu-item>
-        </mdui-select>`;
+        control = `<select class="app-select" data-cfg="${c.key}">
+          <option value="true"${c.value ? ' selected' : ''}>开启</option>
+          <option value="false"${c.value ? '' : ' selected'}>关闭</option>
+        </select>`;
       } else if (c.kind === 'choice') {
         const opts = (c.choice_labels && c.choice_labels.length)
           ? c.choice_labels
           : (c.choices || []).map((o) => ({ value: o, label: o }));
-        control = `<mdui-select data-cfg="${c.key}" value="${esc(String(c.value))}">
-          ${opts.map((o) => `<mdui-menu-item value="${esc(String(o.value))}">${esc(o.label)}</mdui-menu-item>`).join('')}
-        </mdui-select>`;
+        control = `<select class="app-select" data-cfg="${c.key}">
+          ${opts.map((o) => `<option value="${esc(String(o.value))}"${String(o.value) === String(c.value) ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
+        </select>`;
       } else {
-        control = `<mdui-text-field data-cfg="${c.key}" type="number"
-          step="${c.kind === 'int' ? 1 : 'any'}" value="${c.value}"></mdui-text-field>`;
+        control = `<input class="app-select" data-cfg="${c.key}" type="number"
+          step="${c.kind === 'int' ? 1 : 'any'}" value="${esc(String(c.value))}" />`;
       }
       const range = (c.kind === 'float' || c.kind === 'int')
         ? `${c.min} ~ ${c.max}${c.unit ? ' ' + c.unit : ''}` : '';
-      return `<mdui-card style="padding:12px">
-        <div style="font-weight:600">${esc(c.label)}</div>
-        <div style="font-size:11px;opacity:.6;margin:2px 0 8px">${esc(c.key)}</div>
+      return `<div class="mdui-card cfg-item">
+        <div class="cfg-label">${esc(c.label)}</div>
+        <div class="cfg-key">${esc(c.key)}</div>
         ${control}
-        <div style="font-size:11px;opacity:.6;margin-top:6px">
+        <div class="cfg-note">
           ${esc(c.note || '')}${range ? ' · 范围 ' + esc(range) : ''} · 默认 ${esc(c.default)}
         </div>
-      </mdui-card>`;
+      </div>`;
     }).join('');
 
     grid.querySelectorAll('[data-cfg]').forEach((el) => {
       const mark = () => {
         state.cfgDirty[el.dataset.cfg] = el.value;
-        el.style.setProperty('--mdui-color-primary', 'var(--mdui-color-error)');
+        el.classList.add('cfg-dirty');
       };
       el.addEventListener('input', mark);
       el.addEventListener('change', mark);

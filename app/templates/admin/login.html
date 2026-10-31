@@ -1,16 +1,24 @@
-{# 登录：整页只有一张 mdui 卡片，样式全部来自组件 #}
+{# 登录：整页只有一张 mdui 卡片，外观全部来自组件 #}
 <div id="login">
-  <div style="display: flex; justify-content: center; padding: 12vh 16px 0">
-    <mdui-card style="width: 100%; max-width: 380px; padding: 24px">
-      <div style="font-size: 20px; font-weight: 600; margin-bottom: 4px">Stland 运营后台</div>
-      <div style="opacity: .65; font-size: 13px; margin-bottom: 16px">请使用管理员账号登录</div>
+  <div class="login-wrap">
+    <div class="mdui-card">
+      <div class="mdui-card-content">
+        <div class="mdui-typo-title">Stland 运营后台</div>
+        <div class="login-sub">请使用管理员账号登录</div>
 
-      <form id="loginForm" class="stack">
-        <mdui-text-field label="用户名" id="username" autocomplete="username"></mdui-text-field>
-        <mdui-text-field label="口令" id="password" type="password" autocomplete="current-password"></mdui-text-field>
-        <div id="loginErr" style="color: var(--mdui-color-error); font-size: 12px; min-height: 16px"></div>
-        <mdui-button type="submit" variant="filled" id="loginBtn" style="width: 100%">登录</mdui-button>
-      </form>
-    </mdui-card>
+        <form id="loginForm" class="stack">
+          <div class="mdui-textfield">
+            <label class="mdui-textfield-label">用户名</label>
+            <input class="mdui-textfield-input" id="username" autocomplete="username" />
+          </div>
+          <div class="mdui-textfield">
+            <label class="mdui-textfield-label">口令</label>
+            <input class="mdui-textfield-input" id="password" type="password" autocomplete="current-password" />
+          </div>
+          <div id="loginErr" class="login-err"></div>
+          <button class="mdui-btn mdui-btn-block mdui-ripple mdui-btn-raised mdui-color-theme-accent" type="submit" id="loginBtn">登录</button>
+        </form>
+      </div>
+    </div>
   </div>
 </div>

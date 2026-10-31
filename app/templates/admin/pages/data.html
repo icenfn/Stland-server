@@ -1,34 +1,43 @@
 {# 数据初始化 #}
 <section class="page" id="page-data">
   <div class="toolbar">
-    <mdui-button variant="tonal" icon="refresh" id="refreshSeed">刷新状态</mdui-button>
+    <button class="mdui-btn mdui-ripple mdui-btn-raised" id="refreshSeed">
+      <i class="mdui-icon material-icons">refresh</i>刷新状态
+    </button>
   </div>
 
-  <mdui-card style="padding: 16px">
-    <div style="font-weight: 600; margin-bottom: 12px">当前数据</div>
+  <div class="mdui-card"><div class="mdui-card-content">
+    <div class="mdui-typo-title">当前数据</div>
     <div class="kpi-grid" id="seedStatus"></div>
-  </mdui-card>
+  </div></div>
 
-  <mdui-card style="padding: 16px">
-    <div style="font-weight: 600; margin-bottom: 8px">注入初始数据</div>
+  <div class="mdui-card"><div class="mdui-card-content">
+    <div class="mdui-typo-title">注入初始数据</div>
     <div class="stack">
-      <mdui-list>
-        <mdui-list-item>
-          标的与指数
-          <mdui-switch slot="end" id="seedStocks" checked></mdui-switch>
-        </mdui-list-item>
-        <mdui-list-item>
-          演示交易账户
-          <mdui-switch slot="end" id="seedUsers" checked></mdui-switch>
-        </mdui-list-item>
-        <mdui-list-item>
-          历史日线
-          <mdui-switch slot="end" id="seedHistory" checked></mdui-switch>
-        </mdui-list-item>
-      </mdui-list>
+      <div class="seed-row">
+        <span class="seed-label">标的与指数</span>
+        <label class="mdui-switch">
+          <input type="checkbox" id="seedStocks" checked />
+          <i class="mdui-switch-icon"></i>
+        </label>
+      </div>
+      <div class="seed-row">
+        <span class="seed-label">演示交易账户</span>
+        <label class="mdui-switch">
+          <input type="checkbox" id="seedUsers" checked />
+          <i class="mdui-switch-icon"></i>
+        </label>
+      </div>
+      <div class="seed-row">
+        <span class="seed-label">历史日线</span>
+        <label class="mdui-switch">
+          <input type="checkbox" id="seedHistory" checked />
+          <i class="mdui-switch-icon"></i>
+        </label>
+      </div>
       <div>
-        <mdui-button variant="filled" id="seedBtn">开始注入</mdui-button>
+        <button class="mdui-btn mdui-ripple mdui-btn-raised mdui-color-theme-accent" id="seedBtn">开始注入</button>
       </div>
     </div>
-  </mdui-card>
+  </div></div>
 </section>

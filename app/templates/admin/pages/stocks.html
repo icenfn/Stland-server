@@ -1,11 +1,11 @@
 {# 标的与指数 #}
 <section class="page" id="page-stocks">
   <div class="toolbar">
-    <mdui-button variant="filled" icon="add" id="addStock">新增标的</mdui-button>
-    <mdui-button variant="tonal" icon="refresh" id="refreshStocks">刷新</mdui-button>
+    <button class="mdui-btn mdui-ripple mdui-btn-raised mdui-color-theme-accent" id="addStock"><i class="mdui-icon material-icons">add</i>新增标的</button>
+    <button class="mdui-btn mdui-ripple mdui-btn-raised" id="refreshStocks"><i class="mdui-icon material-icons">refresh</i>刷新</button>
   </div>
 
-  <div class="table-wrap">
+  <div class="mdui-table-fluid">
     <table class="mdui-table">
       <thead>
         <tr>
@@ -18,7 +18,7 @@
     </table>
   </div>
 
-  <div class="table-wrap">
+  <div class="mdui-table-fluid">
     <table class="mdui-table">
       <thead>
         <tr><th>指数代码</th><th>名称</th><th class="num">昨收</th><th class="num">涨跌幅</th></tr>

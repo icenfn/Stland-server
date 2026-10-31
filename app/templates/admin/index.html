@@ -3,89 +3,149 @@
 {% include "admin/login.html" %}
 
 <div id="app" hidden>
-  {# mdui-layout + full-height：让顶栏、抽屉、内容区正好占满一屏，
-     内容区自己滚动，避免整页越滚越长导致高度异常 #}
-  <mdui-layout full-height>
-    <mdui-top-app-bar>
-      <mdui-button-icon icon="menu" id="navToggle" aria-label="打开导航"></mdui-button-icon>
-      <mdui-top-app-bar-title>Stland 运营后台</mdui-top-app-bar-title>
-      <div style="flex-grow: 1"></div>
-      <span id="pageTitle"></span>
-      <span id="who" style="opacity: .7; margin: 0 12px"></span>
-      <mdui-button-icon icon="logout" id="logoutBtn" aria-label="退出登录"></mdui-button-icon>
-    </mdui-top-app-bar>
+  {# 顶栏：mdui v1 用 .mdui-appbar-fixed + .mdui-toolbar 组合，自带高度与阴影 #}
+  <div class="mdui-appbar mdui-appbar-fixed">
+    <div class="mdui-toolbar mdui-color-theme">
+      <button class="mdui-btn mdui-btn-icon" id="navToggle" aria-label="打开导航">
+        <i class="mdui-icon material-icons">menu</i>
+      </button>
+      <span class="mdui-typo-title">Stland 运营后台</span>
+      <div class="mdui-toolbar-spacer"></div>
+      <span id="pageTitle" class="app-page-title"></span>
+      <span id="who" class="app-who"></span>
+      <button class="mdui-btn mdui-btn-icon" id="logoutBtn" aria-label="退出登录">
+        <i class="mdui-icon material-icons">logout</i>
+      </button>
+    </div>
+  </div>
 
-    {# 抽屉导航：宽屏常驻侧栏，窄屏点菜单键滑出；选中态用 active 属性 #}
-    <mdui-navigation-drawer id="nav">
-      <mdui-list>
-        {% for item in nav %}
-        <mdui-list-item data-page="{{ item.key }}"{% if loop.first %} active{% endif %} rounded>
-          <mdui-icon slot="icon" name="{{ item.icon }}"></mdui-icon>
-          {{ item.label }}
-        </mdui-list-item>
-        {% endfor %}
-      </mdui-list>
-    </mdui-navigation-drawer>
-
-    <mdui-layout-main>
+  {# 抽屉导航：.mdui-drawer 自带固定定位与滑出动画，宽屏常驻、窄屏点菜单键滑出 #}
+  <div class="mdui-drawer" id="nav">
+    <div class="mdui-list">
       {% for item in nav %}
-      {% include "admin/pages/" ~ item.key ~ ".html" %}
+      <button class="mdui-list-item mdui-ripple nav-item{% if loop.first %} mdui-list-item-active{% endif %}"
+        data-page="{{ item.key }}">
+        <i class="mdui-list-item-icon mdui-icon material-icons">{{ item.icon }}</i>
+        <div class="mdui-list-item-content">{{ item.label }}</div>
+      </button>
       {% endfor %}
-    </mdui-layout-main>
-  </mdui-layout>
+    </div>
+  </div>
+
+  <main class="app-main">
+    {% for item in nav %}
+    {% include "admin/pages/" ~ item.key ~ ".html" %}
+    {% endfor %}
+  </main>
 </div>
 
-{# 新增账户 / 新增管理员 / 编辑标的：三处都是「多字段表单」，用 mdui 对话框承载 #}
-<mdui-dialog id="dlgAccount" icon="person_add">
-  <span slot="headline">新增交易账户</span>
-  <div class="stack">
-    <mdui-text-field label="用户名" id="acUsername"></mdui-text-field>
-    <mdui-text-field label="昵称" id="acDisplay"></mdui-text-field>
-    <mdui-text-field label="初始资金（元）" id="acCash" type="number" value="1000000"></mdui-text-field>
-    <mdui-select label="角色" id="acRole" value="retail">
-      <mdui-menu-item value="retail">零售</mdui-menu-item>
-      <mdui-menu-item value="institution">机构</mdui-menu-item>
-    </mdui-select>
-    <mdui-text-field label="登录口令（至少 8 位）" id="acPassword" type="password"></mdui-text-field>
+{# 三处都是多字段表单，用 mdui 对话框承载；按钮上的 mdui-dialog-close 会由组件自动接管关闭 #}
+<div class="mdui-dialog" id="dlgAccount">
+  <div class="mdui-dialog-title">新增交易账户</div>
+  <div class="mdui-dialog-content">
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">用户名</label>
+      <input class="mdui-textfield-input" id="acUsername" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">昵称</label>
+      <input class="mdui-textfield-input" id="acDisplay" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">初始资金（元）</label>
+      <input class="mdui-textfield-input" id="acCash" type="number" value="1000000" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">角色</label>
+      <select class="app-select" id="acRole">
+        <option value="retail">零售</option>
+        <option value="institution">机构</option>
+      </select>
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">登录口令（至少 8 位）</label>
+      <input class="mdui-textfield-input" id="acPassword" type="password" />
+    </div>
   </div>
-  <mdui-button slot="action" variant="text" id="acCancel">取消</mdui-button>
-  <mdui-button slot="action" variant="filled" id="acSubmit">创建</mdui-button>
-</mdui-dialog>
+  <div class="mdui-dialog-actions">
+    <button class="mdui-btn mdui-ripple mdui-dialog-close">取消</button>
+    <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="acSubmit">创建</button>
+  </div>
+</div>
 
-<mdui-dialog id="dlgAdmin" icon="admin_panel_settings">
-  <span slot="headline">新增管理员</span>
-  <div class="stack">
-    <mdui-text-field label="用户名" id="adUsername"></mdui-text-field>
-    <mdui-text-field label="昵称" id="adDisplay"></mdui-text-field>
-    <mdui-text-field label="登录口令（至少 8 位）" id="adPassword" type="password"></mdui-text-field>
+<div class="mdui-dialog" id="dlgAdmin">
+  <div class="mdui-dialog-title">新增管理员</div>
+  <div class="mdui-dialog-content">
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">用户名</label>
+      <input class="mdui-textfield-input" id="adUsername" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">昵称</label>
+      <input class="mdui-textfield-input" id="adDisplay" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">登录口令（至少 8 位）</label>
+      <input class="mdui-textfield-input" id="adPassword" type="password" />
+    </div>
   </div>
-  <mdui-button slot="action" variant="text" id="adCancel">取消</mdui-button>
-  <mdui-button slot="action" variant="filled" id="adSubmit">创建</mdui-button>
-</mdui-dialog>
+  <div class="mdui-dialog-actions">
+    <button class="mdui-btn mdui-ripple mdui-dialog-close">取消</button>
+    <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="adSubmit">创建</button>
+  </div>
+</div>
 
-<mdui-dialog id="dlgStock" icon="candlestick_chart">
-  <span slot="headline">标的参数</span>
-  <div class="stack">
-    <mdui-text-field label="代码（如 600519.SH）" id="stCode"></mdui-text-field>
-    <mdui-text-field label="名称" id="stName"></mdui-text-field>
-    <mdui-text-field label="板块" id="stBoard"></mdui-text-field>
-    <mdui-text-field label="行业" id="stIndustry"></mdui-text-field>
-    <mdui-text-field label="昨收" id="stPrevClose" type="number"></mdui-text-field>
-    <mdui-text-field label="涨停价" id="stLimitUp" type="number"></mdui-text-field>
-    <mdui-text-field label="跌停价" id="stLimitDown" type="number"></mdui-text-field>
+<div class="mdui-dialog" id="dlgStock">
+  <div class="mdui-dialog-title">标的参数</div>
+  <div class="mdui-dialog-content">
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">代码（如 600519.SH）</label>
+      <input class="mdui-textfield-input" id="stCode" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">名称</label>
+      <input class="mdui-textfield-input" id="stName" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">板块</label>
+      <input class="mdui-textfield-input" id="stBoard" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">行业</label>
+      <input class="mdui-textfield-input" id="stIndustry" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">昨收</label>
+      <input class="mdui-textfield-input" id="stPrevClose" type="number" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">涨停价</label>
+      <input class="mdui-textfield-input" id="stLimitUp" type="number" />
+    </div>
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">跌停价</label>
+      <input class="mdui-textfield-input" id="stLimitDown" type="number" />
+    </div>
   </div>
-  <mdui-button slot="action" variant="text" id="stCancel">取消</mdui-button>
-  <mdui-button slot="action" variant="filled" id="stSubmit">保存</mdui-button>
-</mdui-dialog>
+  <div class="mdui-dialog-actions">
+    <button class="mdui-btn mdui-ripple mdui-dialog-close">取消</button>
+    <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="stSubmit">保存</button>
+  </div>
+</div>
 
-<mdui-dialog id="dlgAdjust" icon="account_balance_wallet">
-  <span slot="headline">调整可用资金</span>
-  <div class="stack">
-    <mdui-text-field label="目标可用资金（元）" id="ajCash" type="number"></mdui-text-field>
+<div class="mdui-dialog" id="dlgAdjust">
+  <div class="mdui-dialog-title">调整可用资金</div>
+  <div class="mdui-dialog-content">
+    <div class="mdui-textfield">
+      <label class="mdui-textfield-label">目标可用资金（元）</label>
+      <input class="mdui-textfield-input" id="ajCash" type="number" />
+    </div>
   </div>
-  <mdui-button slot="action" variant="text" id="ajCancel">取消</mdui-button>
-  <mdui-button slot="action" variant="filled" id="ajSubmit">确定</mdui-button>
-</mdui-dialog>
+  <div class="mdui-dialog-actions">
+    <button class="mdui-btn mdui-ripple mdui-dialog-close">取消</button>
+    <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="ajSubmit">确定</button>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}

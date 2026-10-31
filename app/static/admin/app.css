@@ -1,27 +1,58 @@
 /* ==================================================================
- * 这里只放「页面切换」「区块间距」「表格皮肤」三类结构性样式，
- * 颜色一律引用 mdui 自带的设计令牌（--mdui-color-*），
- * 不写死任何配色，保证跟 mdui 主题（含深色模式）完全一致。
+ * 只放「结构」样式：分区显隐、间距、指标网格、抽屉与顶栏的占位。
+ * 视觉（配色、圆角、阴影、表格皮肤、按钮形态）全部由 mdui 1.x 自带样式提供，
+ * 这里不写任何颜色值，改主题只需换 mdui 的配色类。
  * ================================================================== */
 
-/* mdui-layout 的 full-height 依赖父级高度，这里把根节点撑满 */
 html,
 body {
-  height: 100%;
   margin: 0;
+  min-height: 100%;
 }
 
-/* 十个分区同页共存，靠 .on 控制显隐，切换时不重建 DOM、不丢已填内容 */
+/* 顶栏是 fixed 的，正文必须自己让出高度，否则第一屏内容会被压住 */
+.app-main {
+  padding: 72px 16px 24px;
+  box-sizing: border-box;
+  max-width: 1400px;
+}
+
+/* 宽屏抽屉常驻时给正文让出左侧宽度；窄屏由抽屉浮层覆盖，不需要让位 */
+@media (min-width: 1024px) {
+  body.mdui-drawer-body-left .app-main {
+    padding-left: 256px;
+  }
+  body.mdui-drawer-body-left .mdui-appbar-fixed {
+    left: 240px;
+  }
+}
+
+/* 抽屉从顶栏下方开始，避免盖住标题栏；宽度用 mdui 自带的 240px */
+#nav {
+  top: 56px;
+}
+
+/* 导航项用 <button> 以便键盘可达，这里抹掉按钮原生外观，交回 mdui-list-item 的样式 */
+.nav-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 十个分区同页共存，靠 .on 切显隐：切页不重建 DOM，已填的表单不会丢 */
 .page {
   display: none;
-  padding: 16px;
-  max-width: 1280px;
 }
 .page.on {
   display: block;
 }
 
-/* 区块之间统一留白；不用再给每个卡片单独写 margin */
 .page > * + * {
   margin-top: 16px;
 }
@@ -29,7 +60,7 @@ body {
   margin-top: 12px;
 }
 
-/* 顶部工具栏：把按钮排成一行并允许换行 */
+/* 顶部操作条 */
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -37,74 +68,131 @@ body {
   align-items: center;
 }
 
-/* 指标网格：卡片等宽排布，窄屏自动降列 */
+/* 指标网格：卡片等宽，窄屏自动降列 */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 12px;
 }
 
-/* ------------------------------------------------------------------
- * 表格皮肤
- * mdui 2 没有表格组件（组件清单里只有 list/collapse 等，没有 table），
- * 所以这里用原生 table，配色与边框全部取 mdui 令牌，
- * 视觉上跟 mdui-card / mdui-list 保持一致。
- * ------------------------------------------------------------------ */
-.table-wrap {
-  overflow-x: auto;
-  border-radius: var(--mdui-shape-corner-medium, 12px);
-  border: 1px solid rgb(var(--mdui-color-outline-variant, 202 196 208));
-}
-
-table.mdui-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-  color: rgb(var(--mdui-color-on-surface, 28 27 32));
-  background: rgb(var(--mdui-color-surface, 255 255 255));
-}
-
-table.mdui-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: 12px 16px;
-  text-align: left;
-  font-weight: 500;
-  white-space: nowrap;
-  color: rgb(var(--mdui-color-on-surface-variant, 73 69 79));
-  background: rgb(var(--mdui-color-surface-container, 247 242 250));
-  border-bottom: 1px solid rgb(var(--mdui-color-outline-variant, 202 196 208));
-}
-
-table.mdui-table tbody td {
-  padding: 12px 16px;
-  border-bottom: 1px solid rgb(var(--mdui-color-outline-variant, 202 196 208));
-  vertical-align: middle;
-}
-
-/* 最后一行不画分隔线，避免和容器圆角贴出双层线 */
-table.mdui-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-/* 悬停高亮，用 mdui 的 surface-container-high 令牌 */
-table.mdui-table tbody tr:hover {
-  background: rgb(var(--mdui-color-surface-container-high, 236 230 240));
-}
-
-/* 数字列右对齐，金额/百分比更好比对 */
-table.mdui-table th.num,
-table.mdui-table td.num {
+/* 数字列右对齐，金额/百分比便于纵向比对 */
+.mdui-table th.num,
+.mdui-table td.num {
   text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 
-/* 行内操作按钮之间留 4px，不换行挤压 */
-table.mdui-table td mdui-button {
+/* 行内操作按钮之间留 4px */
+.mdui-table td .mdui-btn {
   margin-right: 4px;
+}
+.mdui-table td .mdui-btn:last-child {
+  margin-right: 0;
+}
+
+/* 表格里的单元格不换行，宽表交给 .mdui-table-fluid 横向滚动 */
+.mdui-table td,
+.mdui-table th {
   white-space: nowrap;
 }
-table.mdui-table td mdui-button:last-child {
-  margin-right: 0;
+
+/* 顶栏右侧的页名与管理员名 */
+.app-page-title {
+  margin-right: 12px;
+  opacity: 0.85;
+}
+.app-who {
+  margin-right: 8px;
+  opacity: 0.75;
+  font-size: 13px;
+}
+
+/* 登录页居中卡片 */
+.login-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 12vh 16px 0;
+}
+.login-wrap .mdui-card {
+  width: 100%;
+  max-width: 380px;
+}
+.login-sub {
+  opacity: 0.65;
+  font-size: 13px;
+  margin: 4px 0 16px;
+}
+.login-err {
+  min-height: 16px;
+  font-size: 12px;
+  color: #d32f2f;
+}
+
+/* 对话框里的下拉选择用原生 select，避免多引一个组件 */
+.app-select {
+  width: 100%;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.42);
+  background: transparent;
+  font: inherit;
+  outline: none;
+}
+
+/* 指标卡：mdui 没有 KPI 卡这种粒度，这里只用 mdui-card 的皮肤加内边距 */
+.kpi {
+  padding: 12px;
+}
+.kpi-label {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.kpi-value {
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+/* 表格行内操作按钮：比普通 mdui-btn 更紧凑，避免一行被按钮撑太宽 */
+.row-btn {
+  min-width: 0;
+  padding: 0 8px;
+  height: 26px;
+  line-height: 26px;
+  font-size: 12px;
+}
+.row-btn-danger {
+  color: #d32f2f;
+}
+
+/* 配置项卡片 */
+.cfg-item {
+  padding: 12px;
+}
+.cfg-label {
+  font-weight: 600;
+}
+.cfg-key {
+  font-size: 11px;
+  opacity: 0.6;
+  margin: 2px 0 8px;
+}
+.cfg-note {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-top: 6px;
+}
+/* 未保存的配置项标红，提示「这一项改过但还没提交」 */
+.cfg-dirty {
+  border-bottom-color: #d32f2f !important;
+}
+
+/* 数据初始化：一行一个开关 */
+.seed-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.seed-label {
+  min-width: 120px;
+  font-size: 14px;
 }

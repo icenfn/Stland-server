@@ -1,17 +1,17 @@
 {# 风险偏好 #}
 <section class="page" id="page-risk">
   <div class="toolbar">
-    <mdui-button variant="tonal" icon="refresh" id="refreshRisk">刷新</mdui-button>
+    <button class="mdui-btn mdui-ripple mdui-btn-raised" id="refreshRisk"><i class="mdui-icon material-icons">refresh</i>刷新</button>
   </div>
 
-  <mdui-card style="padding: 16px">
-    <div style="font-weight: 600; margin-bottom: 12px">风险测评分布</div>
+  <div class="mdui-card"><div class="mdui-card-content">
+    <div class="mdui-typo-title">风险测评分布</div>
     <div class="kpi-grid" id="riskDist"></div>
-  </mdui-card>
+  </div></div>
 
-  <mdui-card style="padding: 16px">
-    <div style="font-weight: 600; margin-bottom: 12px">收益榜</div>
-    <div class="table-wrap">
+  <div class="mdui-card"><div class="mdui-card-content">
+    <div class="mdui-typo-title">收益榜</div>
+    <div class="mdui-table-fluid">
       <table class="mdui-table">
         <thead>
           <tr>
@@ -22,5 +22,5 @@
         <tbody id="leaderboardBody"></tbody>
       </table>
     </div>
-  </mdui-card>
+  </div></div>
 </section>
