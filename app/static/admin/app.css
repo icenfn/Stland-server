@@ -476,3 +476,68 @@ table.mdui-table td.ops {
     padding: 24px;
   }
 }
+
+/* --------------------------------------------------------------------------
+   两级导航（分组 + 子项）
+   -------------------------------------------------------------------------- */
+/* 分组行只是「开关」，不是页面，所以不吃 active 的高亮色，
+   只在展开时把箭头转一下、文字加深，避免和真正的当前页抢注意力 */
+.nav-group .nav-caret {
+  margin-left: auto;
+  font-size: 20px;
+  opacity: 0.5;
+  -webkit-transition: transform 0.2s;
+  transition: transform 0.2s;
+}
+
+.nav-group.active .nav-caret {
+  -webkit-transform: rotate(180deg);
+  transform: rotate(180deg);
+}
+
+.nav-sub {
+  display: none;
+  overflow: hidden;
+}
+
+.nav-sub.on {
+  display: block;
+}
+
+/* 子项左侧缩进 + 图标缩小一号，层级靠位置和字号体现，不靠背景色块 */
+.nav-sub .nav-child {
+  padding-left: 32px;
+  color: rgba(0, 0, 0, 0.72);
+}
+
+.nav-sub .nav-child .mdui-list-item-icon {
+  width: 20px;
+  min-width: 20px;
+  margin-right: 24px;
+  font-size: 18px;
+}
+
+.nav-sub .nav-child .mdui-list-item-content {
+  font-size: 13px;
+}
+
+/* --------------------------------------------------------------------------
+   应用栏压在抽屉遮罩之上
+   -------------------------------------------------------------------------- */
+/* mdui 的抽屉遮罩 z-index 是 2000、应用栏只有 1000，窄屏拉开抽屉时
+   那条半透明遮罩会连顶栏一起盖住，操作按钮跟着变灰不可点。
+   这里把应用栏抬到遮罩之上：顶栏始终保持可用，抽屉仍然从顶栏下沿开始。 */
+.mdui-appbar-fixed {
+  z-index: 3000;
+}
+
+/* 编辑弹窗里零售账户的授信额度是只读的，视觉上给个明确的弱化 */
+.app-field.is-disabled {
+  opacity: 0.55;
+}
+
+.app-toolbar-select {
+  width: auto;
+  min-width: 140px;
+}
+

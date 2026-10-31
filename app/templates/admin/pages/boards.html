@@ -1,0 +1,41 @@
+<section class="app-page" id="page-boards">
+  <div class="app-page-head">
+    <div class="app-page-title">板块与行业</div>
+    <div class="app-page-desc">自由维护的业务分类；与标的的「上市板」无关，只用于聚类展示与筛选</div>
+    <div class="app-toolbar">
+      <select class="app-select app-toolbar-select" id="boardKindFilter">
+        <option value="">全部类型</option>
+        <option value="theme">板块（题材）</option>
+        <option value="sector">行业</option>
+      </select>
+      <button class="mdui-btn mdui-ripple" id="refreshBoards">刷新</button>
+      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="newBoardBtn">新建分类</button>
+    </div>
+  </div>
+
+  <div class="app-kpi-grid" id="boardKpi"></div>
+
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
+      <div class="app-card-title">分类列表</div>
+      <div class="app-card-sub">成分股数量随成分增减实时变化</div>
+    </div>
+    <div class="mdui-table-fluid">
+      <table class="mdui-table">
+        <thead>
+          <tr>
+            <th>类型</th>
+            <th>标识</th>
+            <th>名称</th>
+            <th>说明</th>
+            <th class="num">成分股</th>
+            <th class="num">排序</th>
+            <th>状态</th>
+            <th class="ops">操作</th>
+          </tr>
+        </thead>
+        <tbody id="boardBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>

@@ -63,7 +63,6 @@ def ensure_stocks(session: Session) -> int:
                 limit_down=round(seed.init_price * (1 - pct), 2),
                 tick_size=0.01,
                 lot_size=100,
-                total_shares=seed.float_shares * 1.55,
                 float_shares=seed.float_shares,
                 drift=seed.drift,
                 vol=seed.vol,
@@ -229,23 +228,38 @@ _stop = threading.Event()
 
 
 def _loop() -> None:
-    """后台行情推进线程：每 tick_seconds 推进一次，跨日自动结转。"""
+    """后台循环：行情推进 + 挂单再撮合 + 跨日结转。
+
+    三件事共用一条线程，但**不共用开关**：
+    * `market_engine.tick()` 造的是「价格怎么走」，属于模拟器，受 `engine_enabled` 控制；
+    * `rematch_pending()` 与 `settle_all()` 是交易业务本身的两环 —— 限价单要能被
+      后续行情撮合，T+1 要按交易日解冻。这两件事在真实交易里同样必须发生，
+      所以不能挂在模拟器开关下面。
+
+    之前的写法把三者一起塞进 `if settings.engine_enabled:`，后果是运营一关模拟器，
+    真实下进来的限价单就永远停在 pending、持仓也永远不解冻 —— 模拟器成了交易的
+    前置依赖，这与「交易业务独立于模拟引擎」的定位正好相反。
+    """
     last_date = current_session().trade_date
     while not _stop.is_set():
         try:
+            # 1) 只有模拟器开着才推进价格；关掉等于行情冻结，便于排查
             if settings.engine_enabled:
                 market_engine.tick()
-                # 行情推进后再撮合一次挂单：限价单只有在价格走到委托价时才该成交，
-                # 下单瞬间撮合不到并不代表它永远不成交。
+
+            # 2) 撮合挂单：价格没动也要跑。价格冻结时它只会因为「盘口没变」
+            #    而自然撮合不到，逻辑本身不该被跳过。
+            with session_scope() as session:
+                rematch_pending(session)
+
+            # 3) 跨日结转：T+1 解冻与模拟器无关，日子到了就该解
+            today = current_session().trade_date
+            if today != last_date:
+                last_date = today
                 with session_scope() as session:
-                    rematch_pending(session)
-                today = current_session().trade_date
-                if today != last_date:
-                    last_date = today
-                    with session_scope() as session:
-                        settle_all(session)
+                    settle_all(session)
         except Exception:  # 后台线程不可因单次异常退出
-            logger.exception("行情循环异常")
+            logger.exception("后台循环异常")
         time.sleep(max(0.2, settings.tick_seconds))
 
 

@@ -19,7 +19,8 @@
     stocks: [],
     accounts: {},
     editingStock: null,
-    adjustTarget: null,
+    editTarget: null,
+    boardEditing: null,
     loginRequired: false,
   };
 
@@ -285,7 +286,7 @@
     admins: loadAdmins,
     stocks: function () { return Promise.all([loadStocks(), loadIndices()]); },
     engine: function () { return Promise.all([loadEngine(), loadConfig('engine')]); },
-    risk: loadRisk,
+    boards: loadBoards,
     config: loadConfig,
     data: loadSeedStatus,
     ops: loadOps,
@@ -304,6 +305,21 @@
     for (var j = 0; j < pages.length; j += 1) {
       pages[j].classList.toggle('on', pages[j].id === 'page-' + key);
     }
+    /* 分组跟着当前页自动展开/收起：进到子页就展开它，
+       否则收起，免得子列表一直全开着把侧边栏撑成一条长龙 */
+    var groups = document.querySelectorAll('.nav-group');
+    for (var g = 0; g < groups.length; g += 1) {
+      var grp = groups[g];
+      var sub = $('sub-' + grp.dataset.group);
+      var kids = sub ? sub.querySelectorAll('.nav-item') : [];
+      var active = false;
+      for (var k = 0; k < kids.length; k += 1) {
+        if (kids[k].dataset.page === key) { active = true; break; }
+      }
+      if (sub) sub.classList.toggle('on', active);
+      grp.classList.toggle('active', active);
+    }
+
     $('pageTitle').textContent = label;
     state.page = key;
     if (window.history && window.history.replaceState) {
@@ -343,17 +359,12 @@
         kpi('下跌家数', int(pick(m, ['down'], '--'))) +
         '</div>';
 
-      var r = d.risk_distribution || {};
-      $('ovRisk').innerHTML = [
-        kpi('账户总数', int(r.total)),
-        kpi('未测评', int(r.unassessed)),
-        kpi('保守型', int(r.conservative)),
-        kpi('稳健型', int(r.balanced)),
-        kpi('进取型', int(r.aggressive)),
-      ].join('');
     }).catch(function (e) {
       $('ovKpi').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
     });
+    /* 排名从「风险偏好」页搬过来之后，总览自己负责拉它，
+       两个请求互不影响：KPI 挂了排名照样能出 */
+    loadLeaderboard();
   }
 
   /* -------------------------------------------------------------- 交易账户 */
@@ -389,7 +400,7 @@
       }
 
       body.innerHTML = rows.map(function (u) {
-        var ops = rowBtn('调资金', 'data-act="adjust" data-id="' + u.id + '"') +
+        var ops = rowBtn('编辑', 'data-act="edit" data-id="' + u.id + '"') +
           rowBtn(u.status === 'active' ? '冻结' : '启用',
             'data-act="status" data-id="' + u.id + '" data-status="' + esc(u.status) + '"') +
           rowBtn('删除', 'data-act="del" data-id="' + u.id + '" data-name="' + esc(u.username) + '"', true);
@@ -454,26 +465,49 @@
       .catch(function (e) { notify(e.message); });
   }
 
-  function openAdjustDialog(id, username) {
-    state.adjustTarget = id;
-    $('ajWho').textContent = '账户：' + username;
-    $('ajAmount').value = '';
-    $('ajRemark').value = '';
-    openDlg('dlgAdjust');
+  /* 编辑弹窗：昵称/状态/可用资金/授信额度一次改完。
+     原来的「调资金」只能改钱，改个昵称还得另想办法，两件事被拆在两条链路上，
+     运营点一次就得想清楚自己现在是在改什么。 */
+  function openEditDialog(id) {
+    var role = state.page === 'institution' ? 'institution' : 'retail';
+    var rows = state.accounts[role] || [];
+    var u = rows.filter(function (x) { return String(x.id) === String(id); })[0];
+    if (!u) { notify('账户不存在，请刷新'); return; }
+    state.editTarget = id;
+    $('edWho').textContent = '账户：' + u.username + '（' + (ROLE_LABEL[u.role] || u.role) + '）';
+    $('edDisplay').value = u.display_name || '';
+    $('edStatus').value = u.status || 'active';
+    $('edCash').value = String(u.cash === undefined ? '' : u.cash);
+    $('edCredit').value = String(u.credit_limit === undefined ? 0 : u.credit_limit);
+    /* 授信只有机构账户能改，零售置灰并说明原因，而不是让他改了不生效 */
+    var inst = u.role === 'institution';
+    $('edCredit').disabled = !inst;
+    $('edCreditField').classList.toggle('is-disabled', !inst);
+    $('edRemark').value = '';
+    openDlg('dlgEdit');
   }
 
-  function submitAdjust() {
-    var amount = Number($('ajAmount').value);
-    if (!state.adjustTarget || !isFinite(amount) || amount === 0) {
-      notify('请填写非零金额');
-      return;
+  function submitEdit() {
+    if (!state.editTarget) { notify('请重新选择账户'); return; }
+    var cash = Number($('edCash').value);
+    if (!isFinite(cash) || cash < 0) { notify('可用资金不能为负'); return; }
+    var payload = {
+      display_name: $('edDisplay').value.trim(),
+      status: $('edStatus').value,
+      cash: cash,
+      remark: $('edRemark').value.trim(),
+    };
+    if (!$('edCredit').disabled) {
+      var credit = Number($('edCredit').value || 0);
+      if (!isFinite(credit) || credit < 0) { notify('授信额度不能为负'); return; }
+      payload.credit_limit = credit;
     }
-    api('/api/admin/accounts/' + state.adjustTarget + '/adjust', {
-      method: 'POST',
-      body: JSON.stringify({ amount: amount, remark: $('ajRemark').value.trim() }),
-    }).then(function (d) {
-      closeDlg('dlgAdjust');
-      notify('资金已调整，可用资金 ' + num(d.cash));
+    api('/api/admin/accounts/' + state.editTarget, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }).then(function () {
+      closeDlg('dlgEdit');
+      notify('账户已更新');
       loadAccounts(state.page === 'institution' ? 'institution' : 'retail');
     }).catch(function (e) { notify(e.message); });
   }
@@ -716,21 +750,7 @@
     }).catch(function (e) { notify(e.message); });
   }
 
-  /* -------------------------------------------------------------- 风险偏好 */
-  function loadRisk() {
-    return api('/api/admin/risk-summary').then(function (d) {
-      $('riskDist').innerHTML = [
-        kpi('账户总数', int(d.total)),
-        kpi('未测评', int(d.unassessed)),
-        kpi('保守型', int(d.conservative)),
-        kpi('稳健型', int(d.balanced)),
-        kpi('进取型', int(d.aggressive)),
-      ].join('');
-    }).catch(function (e) {
-      $('riskDist').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
-    }).then(loadLeaderboard);
-  }
-
+  /* -------------------------------------------------------------- 总资产排名 */
   function loadLeaderboard() {
     var body = $('leaderboardBody');
     body.innerHTML = emptyRow(6, '加载中…');
@@ -754,6 +774,141 @@
     }).catch(function (e) {
       body.innerHTML = emptyRow(6, e.message);
     });
+  }
+
+  /* -------------------------------------------------------------- 板块与行业 */
+  var BOARD_KIND_LABEL = { theme: '板块', sector: '行业' };
+
+  function loadBoards() {
+    var body = $('boardBody');
+    body.innerHTML = emptyRow(8, '加载中…');
+    var kind = $('boardKindFilter') ? $('boardKindFilter').value : '';
+    return api('/api/admin/boards' + (kind ? '?kind=' + encodeURIComponent(kind) : ''))
+      .then(function (d) {
+        var rows = d.items || [];
+        $('boardKpi').innerHTML = [
+          kpi('分类总数', int(d.total)),
+          kpi('板块（题材）', int(d.theme_count)),
+          kpi('行业', int(d.sector_count)),
+          kpi('成分关联数', int(d.members)),
+        ].join('');
+        if (!rows.length) {
+          body.innerHTML = emptyRow(8, kind ? '该类型下还没有分类' : '暂无分类，可点「新建分类」');
+          return;
+        }
+        body.innerHTML = rows.map(function (b) {
+          var ops = rowBtn('成分', 'data-act="boardmem" data-id="' + b.id + '" data-name="' + esc(b.name) + '"') +
+            rowBtn('编辑', 'data-act="editboard" data-id="' + b.id + '"') +
+            rowBtn('删除', 'data-act="delboard" data-id="' + b.id + '" data-name="' + esc(b.name) + '"', true);
+          return '<tr>' +
+            '<td>' + esc(BOARD_KIND_LABEL[b.kind] || b.kind) + '</td>' +
+            '<td>' + esc(b.key) + '</td>' +
+            '<td>' + esc(b.name) + '</td>' +
+            '<td>' + esc(b.desc || '--') + '</td>' +
+            '<td class="num">' + int(b.members) + '</td>' +
+            '<td class="num">' + int(b.sort) + '</td>' +
+            '<td>' + (b.enabled ? '启用' : '停用') + '</td>' +
+            '<td class="ops">' + ops + '</td>' +
+            '</tr>';
+        }).join('');
+      })
+      .catch(function (e) {
+        $('boardKpi').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
+        body.innerHTML = emptyRow(8, e.message);
+      });
+  }
+
+  function openBoardDialog(id) {
+    state.boardEditing = id || null;
+    if (id) {
+      api('/api/admin/boards').then(function (d) {
+        var b = (d.items || []).filter(function (x) { return String(x.id) === String(id); })[0];
+        if (!b) { notify('分类不存在，请刷新'); return; }
+        $('bdTitle').textContent = '编辑分类';
+        $('bdKind').value = b.kind;
+        $('bdKind').disabled = true;   // 类型不可改，改了就置灰，别让人白填一遍
+        $('bdKey').value = b.key;
+        $('bdName').value = b.name;
+        $('bdDesc').value = b.desc || '';
+        $('bdSort').value = String(b.sort || 0);
+        openDlg('dlgBoard');
+      }).catch(function (e) { notify(e.message); });
+      return;
+    }
+    $('bdTitle').textContent = '新建分类';
+    $('bdKind').disabled = false;
+    $('bdKind').value = $('boardKindFilter').value || 'theme';
+    $('bdKey').value = '';
+    $('bdName').value = '';
+    $('bdDesc').value = '';
+    $('bdSort').value = '0';
+    openDlg('dlgBoard');
+  }
+
+  function submitBoard() {
+    var name = $('bdName').value.trim();
+    if (!name) { notify('请填写名称'); return; }
+    var payload = {
+      kind: $('bdKind').value,
+      key: $('bdKey').value.trim() || name,
+      name: name,
+      desc: $('bdDesc').value.trim(),
+      sort: Number($('bdSort').value || 0),
+      enabled: true,
+    };
+    var isEdit = !!state.boardEditing;
+    var req = isEdit
+      ? api('/api/admin/boards/' + state.boardEditing, { method: 'PUT', body: JSON.stringify(payload) })
+      : api('/api/admin/boards', { method: 'POST', body: JSON.stringify(payload) });
+    req.then(function () {
+      closeDlg('dlgBoard');
+      notify(isEdit ? '分类已更新' : '分类已创建');
+      loadBoards();
+    }).catch(function (e) { notify(e.message); });
+  }
+
+  function deleteBoard(id, name) {
+    ask('删除分类「' + name + '」？成分关联会一并清掉，标的本身不受影响。', '删除分类')
+      .then(function (ok) {
+        if (!ok) return;
+        return api('/api/admin/boards/' + id, { method: 'DELETE' }).then(function () {
+          notify('分类已删除');
+          loadBoards();
+        });
+      }).catch(function (e) { notify(e.message); });
+  }
+
+  function openMembersDialog(id, name) {
+    state.boardEditing = id;
+    $('mbTitle').textContent = '成分股 · ' + name;
+    $('mbCodes').value = '';
+    $('mbList').textContent = '加载中…';
+    openDlg('dlgMembers');
+    api('/api/admin/boards/' + id + '/members').then(function (d) {
+      var rows = d.items || [];
+      $('mbList').innerHTML = rows.length
+        ? '当前 ' + rows.length + ' 支：' + rows.map(function (x) {
+            return esc(x.code) + (x.name ? ' ' + esc(x.name) : '');
+          }).join('、')
+        : '当前没有成分股，可在下方批量加入';
+    }).catch(function (e) {
+      $('mbList').textContent = e.message;
+    });
+  }
+
+  function submitMembers() {
+    var raw = $('mbCodes').value || '';
+    var codes = raw.split(/[,，\s]+/).filter(function (c) { return c; });
+    if (!codes.length) { notify('请填写至少一个代码'); return; }
+    api('/api/admin/boards/' + state.boardEditing + '/members', {
+      method: 'POST',
+      body: JSON.stringify({ codes: codes }),
+    }).then(function (d) {
+      notify('已加入 ' + int(d.added) + ' 支，跳过 ' + int(d.skipped) + ' 支');
+      $('mbCodes').value = '';
+      openMembersDialog(state.boardEditing, ($('mbTitle').textContent || '').replace('成分股 · ', ''));
+      loadBoards();
+    }).catch(function (e) { notify(e.message); });
   }
 
   /* -------------------------------------------------------------- 系统配置 */
@@ -928,19 +1083,18 @@
     });
   }
 
-  function settle() {
-    ask('确认执行日终结转？将解锁全部 T+1 持仓。', '日终结转').then(function (ok) {
-      if (!ok) return;
-      return api('/api/admin/settle', { method: 'POST' }).then(function () {
-        notify('结转完成');
-        loadOps();
-      });
-    }).catch(function (e) { notify(e.message); });
-  }
-
   /* ------------------------------------------------------------------ 绑定 */
   function bind() {
     $('navToggle').addEventListener('click', toggleDrawer);
+
+    document.querySelectorAll('.nav-group').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var sub = $('sub-' + el.dataset.group);
+        if (!sub) return;
+        sub.classList.toggle('on');
+        el.classList.toggle('active', sub.classList.contains('on'));
+      });
+    });
 
     document.querySelectorAll('.nav-item').forEach(function (el) {
       el.addEventListener('click', function () { showPage(el.dataset.page); });
@@ -1000,8 +1154,18 @@
     $('toggleEngine').addEventListener('click', toggleEngine);
     $('resetEngine').addEventListener('click', resetEngine);
 
-    /* 风险 */
-    $('refreshRisk').addEventListener('click', loadRisk);
+    /* 编辑账户弹窗 */
+    $('edCancel').addEventListener('click', function () { closeDlg('dlgEdit'); });
+    $('edSubmit').addEventListener('click', submitEdit);
+
+    /* 板块与行业 */
+    $('refreshBoards').addEventListener('click', loadBoards);
+    $('boardKindFilter').addEventListener('change', loadBoards);
+    $('newBoardBtn').addEventListener('click', function () { openBoardDialog(null); });
+    $('bdCancel').addEventListener('click', function () { closeDlg('dlgBoard'); });
+    $('bdSubmit').addEventListener('click', submitBoard);
+    $('mbClose').addEventListener('click', function () { closeDlg('dlgMembers'); });
+    $('mbSubmit').addEventListener('click', submitMembers);
 
     /* 配置 */
     $('refreshCfg').addEventListener('click', loadConfig);
@@ -1018,7 +1182,6 @@
 
     /* 撮合 */
     $('refreshOps').addEventListener('click', loadOps);
-    $('settleBtn').addEventListener('click', settle);
 
     /* 表格内的行内按钮统一在这里委托，只认 .row-btn，
        避免误吃顶栏或对话框里的 mdui 按钮 */
@@ -1026,11 +1189,14 @@
       var btn = e.target.closest ? e.target.closest('.row-btn') : null;
       if (!btn) return;
       var act = btn.dataset.act;
-      if (act === 'adjust') openAdjustDialog(btn.dataset.id, btn.dataset.name || btn.dataset.id);
+      if (act === 'edit') openEditDialog(btn.dataset.id);
       else if (act === 'status') toggleAccountStatus(btn.dataset.id, btn.dataset.status);
       else if (act === 'del') deleteAccount(btn.dataset.id, btn.dataset.name);
       else if (act === 'editstock') openStockDialog(btn.dataset.code);
       else if (act === 'delstock') deleteStock(btn.dataset.code, btn.dataset.name);
+      else if (act === 'editboard') openBoardDialog(btn.dataset.id);
+      else if (act === 'delboard') deleteBoard(btn.dataset.id, btn.dataset.name);
+      else if (act === 'boardmem') openMembersDialog(btn.dataset.id, btn.dataset.name);
       else if (act === 'admstat') {
         var active = btn.dataset.active === '1';
         api('/api/admin/admins/' + btn.dataset.id + '/status', {

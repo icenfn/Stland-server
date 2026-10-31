@@ -146,6 +146,39 @@ class Setting(SQLModel, table=True):
     updated_by: str = Field(default="", max_length=40)
 
 
+class Board(SQLModel, table=True):
+    """业务分类：板块（题材）与行业，两者结构完全一致，用 ``kind`` 区分。
+
+    与 ``Stock.board`` 的区别：那个字段是**上市板**（主板/创业板/科创板），
+    由交易所定涨跌幅，运营改不得；这里的分类是**自由维护的业务标签**，
+    只用于聚类展示与筛选。
+
+    ``kind``：``sector``=行业，``theme``=板块（题材）。
+    ``key`` 是稳定标识（英文/拼音），``name`` 是展示名；改展示名不影响
+    成分股关联。一支标的可属于多个板块，但只归一个行业（由行业侧的
+    ``unique`` 约束在接口层保证）。
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    kind: str = Field(default="theme", max_length=8, index=True)
+    key: str = Field(max_length=40, index=True)
+    name: str = Field(max_length=32)
+    desc: str = Field(default="", max_length=200)
+    sort: int = Field(default=0)
+    enabled: bool = Field(default=True)
+    created_at: float = Field(default_factory=now_ts)
+    updated_at: float = Field(default_factory=now_ts)
+
+
+class BoardMember(SQLModel, table=True):
+    """分类成分：board_id + code 成对，重复加入由接口层保证幂等。"""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    board_id: int = Field(index=True)
+    code: str = Field(index=True, max_length=12)
+    created_at: float = Field(default_factory=now_ts)
+
+
 class WatchGroup(SQLModel, table=True):
     """自选股分组（每个账户私有）。"""
 
@@ -181,7 +214,8 @@ class Stock(SQLModel, table=True):
     limit_down: float = Field(default=9.0)
     tick_size: float = Field(default=0.01)
     lot_size: int = Field(default=100)
-    total_shares: float = Field(default=1e9)   # 总股本（股）
+    # 只存流通股本：总股本在本系统里没有任何计算依赖（市值按流通股本口径），
+    # 之前额外存一份 total_shares 且恒等于 float_shares*1.55，属派生冗余。
     float_shares: float = Field(default=5e8)   # 流通股本（股）
     is_st: bool = Field(default=False)
 
@@ -191,26 +225,6 @@ class Stock(SQLModel, table=True):
     vol: float = Field(default=0.35)          # 年化波动率
     beta: float = Field(default=1.0)          # 对市场因子的敏感度
     liquidity: float = Field(default=1.0)     # 相对流动性（影响挂单深度）
-
-
-class QuoteTick(SQLModel, table=True):
-    """逐笔行情快照（tick 级），支撑分时与 K 线合成。"""
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    code: str = Field(index=True, max_length=12)
-    ts: float = Field(default_factory=now_ts, index=True)
-    price: float = 0.0
-    open: float = 0.0
-    high: float = 0.0
-    low: float = 0.0
-    prev_close: float = 0.0
-    volume: int = 0
-    amount: float = 0.0
-    bid: float = 0.0
-    ask: float = 0.0
-    bid_volume: int = 0
-    ask_volume: int = 0
-    turnover_rate: float = 0.0
 
 
 class DailyBar(SQLModel, table=True):

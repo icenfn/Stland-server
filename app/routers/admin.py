@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import time
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -26,12 +27,13 @@ from ..engine.session import current_session
 from ..models import (
     AccountStatus,
     Admin,
+    Board,
+    BoardMember,
     CashFlow,
     DailyBar,
     Order,
     OrderStatus,
     Position,
-    QuoteTick,
     Role,
     Stock,
     Trade,
@@ -41,7 +43,6 @@ from ..models import (
 )
 from ..security import hash_password, verify_password
 from ..services.deps import admin_user, issue_admin_token
-from ..services.trading import settle_all
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -165,24 +166,7 @@ def dashboard(session: Session = Depends(get_session), admin: Admin = Depends(ad
             "can_trade": st.can_trade,
             "trade_date": st.trade_date,
         },
-        "risk_distribution": _risk_distribution(session),
     }
-
-
-def _risk_distribution(session: Session) -> dict:
-    """风险偏好分布：多少账户未测评、多少是保守/稳健/进取（只看交易账户）。"""
-    rows = session.exec(select(User)).all()
-    dist = {"unassessed": 0, "conservative": 0, "balanced": 0, "aggressive": 0}
-    for u in rows:
-        if u.risk_assessed_at <= 0 or u.risk_level <= 0:
-            dist["unassessed"] += 1
-        elif u.risk_level <= 1:
-            dist["conservative"] += 1
-        elif u.risk_level == 2:
-            dist["balanced"] += 1
-        else:
-            dist["aggressive"] += 1
-    return {"total": len(rows), **dist}
 
 
 # --------------------------------------------------------------------------- #
@@ -358,42 +342,75 @@ def update_account_status(
     return {"ok": True, "status": target.status.value}
 
 
-class AdjustIn(BaseModel):
-    amount: float = Field(description="正数入金，负数出金")
+class AccountEditIn(BaseModel):
+    """账户编辑请求体。
+
+    可用资金用「目标值」而不是增减量：编辑弹窗里运营看到的是当前余额，
+    填多少就是改成多少，比让他自己算差额直观，也避免填错正负号。
+    差额会写一条流水，账面变化照样可回溯。
+    """
+
+    display_name: Optional[str] = Field(default=None, max_length=40)
+    status: Optional[AccountStatus] = None
+    cash: Optional[float] = Field(default=None, ge=0)
+    credit_limit: Optional[float] = Field(default=None, ge=0)
     remark: str = Field(default="", max_length=80)
 
 
-@router.post("/accounts/{user_id}/adjust")
-def adjust_cash(
+@router.put("/accounts/{user_id}")
+def edit_account(
     user_id: int,
-    payload: AdjustIn,
+    payload: AccountEditIn,
     session: Session = Depends(get_session),
     admin: Admin = Depends(admin_user),
 ) -> dict:
-    """调整账户可用资金（入金/出金），并写一条流水。"""
+    """编辑交易账户：昵称、状态、可用资金、授信额度一次提交。
+
+    资金改动同样写一条 `cash_flow`，与原来的「调资金」保持同一套账。
+    """
     target = session.get(User, user_id)
     if target is None:
         raise HTTPException(404, detail={"code": "USER_NOT_FOUND", "message": "账户不存在"})
-    before = target.cash
-    new_cash = round(target.cash + payload.amount, 4)
-    if new_cash < 0:
-        raise HTTPException(400, detail={"code": "INVALID_AMOUNT", "message": "调整后可用资金不能为负"})
-    target.cash = new_cash
+
+    if payload.display_name is not None:
+        name = payload.display_name.strip()
+        target.display_name = name or target.username
+    if payload.status is not None:
+        target.status = payload.status
+    if payload.credit_limit is not None:
+        # 授信只有机构账户有意义，零售账户写 0，避免出现「零售也能融资」的错觉
+        target.credit_limit = payload.credit_limit if target.role == Role.INSTITUTION else 0.0
+
+    if payload.cash is not None:
+        now_cash = round(payload.cash, 4)
+        delta = round(now_cash - target.cash, 4)
+        if delta != 0:
+            before = target.cash
+            target.cash = now_cash
+            session.add(
+                CashFlow(
+                    user_id=target.id or 0,
+                    biz_type="adjust",
+                    amount=delta,
+                    balance_before=round(before, 4),
+                    balance_after=now_cash,
+                    remark=payload.remark or "管理端资金调整",
+                )
+            )
+
     target.total_asset = round(target.cash + target.frozen_cash + target.market_value, 4)
     target.updated_at = time.time()
     session.add(target)
-    session.add(
-        CashFlow(
-            user_id=target.id or 0,
-            biz_type="adjust",
-            amount=round(payload.amount, 4),
-            balance_before=round(before, 4),
-            balance_after=new_cash,
-            remark=payload.remark or "管理端资金调整",
-        )
-    )
     session.commit()
-    return {"ok": True, "cash": target.cash, "total_asset": target.total_asset}
+    return {
+        "ok": True,
+        "id": target.id,
+        "display_name": target.display_name,
+        "status": target.status.value,
+        "cash": round(target.cash, 2),
+        "credit_limit": round(target.credit_limit, 2),
+        "total_asset": round(target.total_asset, 2),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -544,7 +561,6 @@ def _apply(stock: Stock, payload: StockIn) -> Stock:
     stock.drift = payload.drift
     stock.liquidity = payload.liquidity
     stock.float_shares = payload.float_shares
-    stock.total_shares = payload.float_shares * 1.55
     return stock
 
 
@@ -614,18 +630,237 @@ def delete_stock(
             detail={"code": "STOCK_HELD", "message": f"仍有 {len(held)} 个账户持有该标的，请先处理持仓"},
         )
     # 真删除：这一步就是「这支不要了」，不做软删除、不留下架标记。
-    # 先清掉依附在这支标的上的行情与自选成分 —— 委托与成交流水属于账户侧历史，
-    # 保留不动，删标的不能让别人的对账记录跟着消失。
-    for model in (DailyBar, QuoteTick):
+    # 先清掉依附在这支标的上的行情、自选成分与分类归属 —— 委托与成交流水属于
+    # 账户侧历史，保留不动，删标的不能让别人的对账记录跟着消失。
+    for model in (DailyBar, WatchItem):
         for row in session.exec(select(model).where(model.code == code)).all():
             session.delete(row)
-    for row in session.exec(select(WatchItem).where(WatchItem.code == code)).all():
+    for row in session.exec(select(BoardMember).where(BoardMember.code == code)).all():
         session.delete(row)
 
     session.delete(stock)
     session.commit()
     market_engine.unregister(code)
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# 板块与行业（自由维护的业务分类）
+# --------------------------------------------------------------------------- #
+BOARD_KINDS = {"theme": "板块", "sector": "行业"}
+
+
+class BoardIn(BaseModel):
+    kind: str = Field(default="theme", max_length=8)
+    key: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=32)
+    desc: str = Field(default="", max_length=200)
+    sort: int = Field(default=0)
+    enabled: bool = True
+
+
+def _board_public(session: Session, b: Board) -> dict:
+    members = session.exec(select(BoardMember).where(BoardMember.board_id == (b.id or 0))).all()
+    return {
+        "id": b.id,
+        "kind": b.kind,
+        "kind_label": BOARD_KINDS.get(b.kind, b.kind),
+        "key": b.key,
+        "name": b.name,
+        "desc": b.desc,
+        "sort": b.sort,
+        "enabled": b.enabled,
+        "members": len(members),
+        "created_at": b.created_at,
+        "updated_at": b.updated_at,
+    }
+
+
+@router.get("/boards")
+def list_boards(
+    kind: str = Query(default="", max_length=8),
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """列出全部板块/行业分类，可按 kind 过滤。
+
+    成分股数量在这里一次算好，前端不必再对每个分类回查一遍。
+    """
+    stmt = select(Board)
+    if kind:
+        if kind not in BOARD_KINDS:
+            raise HTTPException(400, detail={"code": "BAD_KIND", "message": "kind 仅支持 theme/sector"})
+        stmt = stmt.where(Board.kind == kind)
+    rows = session.exec(stmt.order_by(Board.kind, Board.sort, Board.id)).all()
+    items = [_board_public(session, b) for b in rows]
+    themes = [i for i in items if i["kind"] == "theme"]
+    sectors = [i for i in items if i["kind"] == "sector"]
+    return {
+        "total": len(items),
+        "theme_count": len(themes),
+        "sector_count": len(sectors),
+        "members": sum(i["members"] for i in items),
+        "items": items,
+    }
+
+
+def _slug_key(kind: str, session: Session, seed: str) -> str:
+    """按名称生成稳定 key：优先用调用方给的 key，缺省时用 pinyin 不可得则退化成序号。"""
+    base = (seed or "").strip()
+    if base:
+        return base
+    n = session.exec(select(func.count()).select_from(Board).where(Board.kind == kind)).one()
+    return f"{kind}-{n + 1}"
+
+
+@router.post("/boards")
+def create_board(
+    payload: BoardIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    if payload.kind not in BOARD_KINDS:
+        raise HTTPException(400, detail={"code": "BAD_KIND", "message": "kind 仅支持 theme/sector"})
+    key = _slug_key(payload.kind, session, payload.key)
+    dup = session.exec(
+        select(Board).where(Board.kind == payload.kind, Board.key == key)
+    ).first()
+    if dup is not None:
+        raise HTTPException(400, detail={"code": "DUP_KEY", "message": f"标识 {key} 已存在"})
+    board = Board(
+        kind=payload.kind,
+        key=key,
+        name=payload.name,
+        desc=payload.desc,
+        sort=payload.sort,
+        enabled=payload.enabled,
+    )
+    session.add(board)
+    session.commit()
+    session.refresh(board)
+    return {"ok": True, "id": board.id}
+
+
+@router.put("/boards/{board_id}")
+def update_board(
+    board_id: int,
+    payload: BoardIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    board = session.get(Board, board_id)
+    if board is None:
+        raise HTTPException(404, detail={"code": "BOARD_NOT_FOUND", "message": "分类不存在"})
+    if payload.kind not in BOARD_KINDS:
+        raise HTTPException(400, detail={"code": "BAD_KIND", "message": "kind 仅支持 theme/sector"})
+    if payload.kind != board.kind:
+        raise HTTPException(400, detail={"code": "KIND_IMMUTABLE", "message": "类型不可修改，如需更换请删除后新建"})
+    if payload.key != board.key:
+        dup = session.exec(
+            select(Board).where(Board.kind == board.kind, Board.key == payload.key, Board.id != board_id)
+        ).first()
+        if dup is not None:
+            raise HTTPException(400, detail={"code": "DUP_KEY", "message": f"标识 {payload.key} 已存在"})
+    board.key = payload.key
+    board.name = payload.name
+    board.desc = payload.desc
+    board.sort = payload.sort
+    board.enabled = payload.enabled
+    board.updated_at = time.time()
+    session.add(board)
+    session.commit()
+    return {"ok": True}
+
+
+@router.delete("/boards/{board_id}")
+def delete_board(
+    board_id: int,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """删除分类本身，成分关联一并清掉；标的本身不受影响。"""
+    board = session.get(Board, board_id)
+    if board is None:
+        raise HTTPException(404, detail={"code": "BOARD_NOT_FOUND", "message": "分类不存在"})
+    for row in session.exec(select(BoardMember).where(BoardMember.board_id == board_id)).all():
+        session.delete(row)
+    session.delete(board)
+    session.commit()
+    return {"ok": True}
+
+
+@router.get("/boards/{board_id}/members")
+def list_board_members(
+    board_id: int,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    board = session.get(Board, board_id)
+    if board is None:
+        raise HTTPException(404, detail={"code": "BOARD_NOT_FOUND", "message": "分类不存在"})
+    rows = session.exec(select(BoardMember).where(BoardMember.board_id == board_id)).all()
+    codes = [r.code for r in rows]
+    name_map = {}
+    if codes:
+        for st in session.exec(select(Stock).where(Stock.code.in_(codes))).all():
+            name_map[st.code] = st.name
+    items = [{"code": c, "name": name_map.get(c, "")} for c in sorted(codes)]
+    return {"board": _board_public(session, board), "total": len(items), "items": items}
+
+
+class BoardMemberIn(BaseModel):
+    codes: list[str] = Field(default_factory=list)
+
+
+@router.post("/boards/{board_id}/members")
+def add_board_members(
+    board_id: int,
+    payload: BoardMemberIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """批量加入成分股。已存在的跳过，未知代码直接拒绝，避免脏关联。"""
+    board = session.get(Board, board_id)
+    if board is None:
+        raise HTTPException(404, detail={"code": "BOARD_NOT_FOUND", "message": "分类不存在"})
+    wanted = [c.strip() for c in payload.codes if c and c.strip()]
+    if not wanted:
+        raise HTTPException(400, detail={"code": "EMPTY_CODES", "message": "请至少提供一个代码"})
+    known = {st.code for st in session.exec(select(Stock).where(Stock.code.in_(wanted))).all()}
+    unknown = [c for c in wanted if c not in known]
+    if unknown:
+        raise HTTPException(
+            400,
+            detail={"code": "UNKNOWN_CODE", "message": "以下代码不存在：" + "、".join(unknown[:5])},
+        )
+    existing = {
+        r.code for r in session.exec(select(BoardMember).where(BoardMember.board_id == board_id)).all()
+    }
+    added = 0
+    for code in wanted:
+        if code in existing:
+            continue
+        session.add(BoardMember(board_id=board_id, code=code))
+        existing.add(code)
+        added += 1
+    session.commit()
+    return {"ok": True, "added": added, "skipped": len(wanted) - added}
+
+
+@router.delete("/boards/{board_id}/members/{code}")
+def remove_board_member(
+    board_id: int,
+    code: str,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    rows = session.exec(
+        select(BoardMember).where(BoardMember.board_id == board_id, BoardMember.code == code)
+    ).all()
+    for row in rows:
+        session.delete(row)
+    session.commit()
+    return {"ok": True, "removed": len(rows)}
 
 
 # --------------------------------------------------------------------------- #
@@ -768,17 +1003,3 @@ def leaderboard(session: Session = Depends(get_session), admin: Admin = Depends(
     return {"items": items}
 
 
-@router.post("/settle")
-def settle(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
-    """执行日终结转（T+1 解锁）。"""
-    settle_all(session)
-    return {"ok": True, "at": int(time.time())}
-
-
-# --------------------------------------------------------------------------- #
-# 风险偏好（只读汇总，无历史档案）
-# --------------------------------------------------------------------------- #
-@router.get("/risk-summary")
-def risk_summary(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
-    """风险偏好分布（零售 + 机构）。历史档案功能已移除，这里只给当前分布。"""
-    return _risk_distribution(session)
