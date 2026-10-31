@@ -1,23 +1,24 @@
-{# 登录：整页只有一张 mdui 卡片，外观全部来自组件 #}
-<div id="login">
-  <div class="login-wrap">
-    <div class="mdui-card">
-      <div class="mdui-card-content">
-        <div class="mdui-typo-title">Stland 运营后台</div>
-        <div class="login-sub">请使用管理员账号登录</div>
-
-        <form id="loginForm" class="stack">
-          <div class="mdui-textfield">
-            <label class="mdui-textfield-label">用户名</label>
-            <input class="mdui-textfield-input" id="username" autocomplete="username" />
-          </div>
-          <div class="mdui-textfield">
-            <label class="mdui-textfield-label">口令</label>
-            <input class="mdui-textfield-input" id="password" type="password" autocomplete="current-password" />
-          </div>
-          <div id="loginErr" class="login-err"></div>
-          <button class="mdui-btn mdui-btn-block mdui-ripple mdui-btn-raised mdui-color-theme-accent" type="submit" id="loginBtn">登录</button>
-        </form>
+{# 登录以覆盖层形式内嵌在 index.html 里：后端没有独立的 /login 路由，
+   未登录时先用页面骨架兜住，认证通过后再揭开底层界面 #}
+<div class="app-login" id="login" hidden>
+  <div class="mdui-card app-login-card">
+    <div class="mdui-card-primary">
+      <div class="mdui-card-primary-title">Stland 运营后台</div>
+      <div class="mdui-card-primary-subtitle">请使用管理员账号登录</div>
+    </div>
+    <div class="mdui-card-content">
+      <div class="app-field">
+        <label class="app-field-label" for="loginUser">登录名</label>
+        <input class="app-select" id="loginUser" autocomplete="username" placeholder="管理员登录名" />
+      </div>
+      <div class="app-field">
+        <label class="app-field-label" for="loginPass">口令</label>
+        <input class="app-select" id="loginPass" type="password" autocomplete="current-password" placeholder="口令" />
+      </div>
+      <div class="app-login-err" id="loginErr"></div>
+      <div class="app-login-actions">
+        <span class="app-field-hint">连续失败会临时锁定账号</span>
+        <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="loginBtn">登录</button>
       </div>
     </div>
   </div>

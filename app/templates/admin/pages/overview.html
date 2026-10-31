@@ -1,13 +1,29 @@
-{# 总览：指标卡 + 市场状态 #}
-<section class="page on" id="page-overview">
-  <div class="toolbar">
-    <button class="mdui-btn mdui-ripple mdui-btn-raised" id="refreshOverview"><i class="mdui-icon material-icons">refresh</i>刷新</button>
+<section class="app-page on" id="page-overview">
+  <div class="app-page-head">
+    <div class="app-page-title">总览</div>
+    <div class="app-page-desc">账户、资产与今日交易的整体情况</div>
+    <div class="app-toolbar">
+      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="refreshOverview">刷新</button>
+    </div>
   </div>
 
-  <div class="kpi-grid" id="ovKpi"></div>
+  <div class="app-kpi-grid" id="ovKpi"></div>
 
-  <div class="mdui-card"><div class="mdui-card-content">
-    <div class="mdui-typo-title">市场状态</div>
-    <div class="kpi-grid" id="ovMarket"></div>
-  </div></div>
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
+      <div class="app-card-title">当前会话</div>
+      <div class="app-card-sub">交易时段与行情节奏</div>
+    </div>
+    <div class="app-card-body" id="ovSession"></div>
+  </div>
+
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
+      <div class="app-card-title">风险偏好分布</div>
+      <div class="app-card-sub">未测评的账户单独计数，不计入三类</div>
+    </div>
+    <div class="app-card-body">
+      <div class="app-kpi-grid" id="ovRisk"></div>
+    </div>
+  </div>
 </section>

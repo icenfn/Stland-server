@@ -1,198 +1,469 @@
-/* ==================================================================
- * 只放「结构」样式：分区显隐、间距、指标网格、抽屉与顶栏的占位。
- * 视觉（配色、圆角、阴影、表格皮肤、按钮形态）全部由 mdui 1.x 自带样式提供，
- * 这里不写任何颜色值，改主题只需换 mdui 的配色类。
- * ================================================================== */
+/* ==========================================================================
+   Stland 运营后台 —— 结构性样式
+
+   这里只负责「怎么排」，不负责「长什么样」：
+   配色、圆角、阴影、按钮、表格、输入框的视觉全部由 mdui 1.x 自带样式提供。
+   主色/强调色在 base.html 的 body 类上指定（mdui-theme-primary-indigo /
+   mdui-theme-accent-pink），本文件不出现任何品牌色。
+   ========================================================================== */
 
 html,
 body {
   margin: 0;
-  min-height: 100%;
+  padding: 0;
 }
 
-/* 顶栏是 fixed 的，正文必须自己让出高度，否则第一屏内容会被压住 */
-.app-main {
-  padding: 72px 16px 24px;
-  box-sizing: border-box;
-  max-width: 1400px;
+/* 中性底色，让白色的 mdui-card 能浮出来（不参与组件外观） */
+.app-body {
+  background: #eceff3;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* 宽屏抽屉常驻时给正文让出左侧宽度；窄屏由抽屉浮层覆盖，不需要让位 */
-@media (min-width: 1024px) {
-  body.mdui-drawer-body-left .app-main {
-    padding-left: 256px;
-  }
-  body.mdui-drawer-body-left .mdui-appbar-fixed {
-    left: 240px;
-  }
-}
-
-/* 抽屉从顶栏下方开始，避免盖住标题栏；宽度用 mdui 自带的 240px */
-#nav {
+/* --------------------------------------------------------------------------
+   侧边栏（mdui-drawer）
+   -------------------------------------------------------------------------- */
+/* mdui 的抽屉默认 top:0 并自带滚动；这里让它从顶栏下方开始，
+   滚动交给内层 .app-nav，避免抽屉与列表出现两条滚动条 */
+.app-drawer {
   top: 56px;
+  height: calc(100% - 56px);
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  overflow: hidden;
+  background: #fff;
 }
 
-/* 导航项用 <button> 以便键盘可达，这里抹掉按钮原生外观，交回 mdui-list-item 的样式 */
-.nav-item {
+@media (min-width: 1024px) {
+  .app-drawer {
+    top: 64px;
+    height: calc(100% - 64px);
+  }
+}
+
+.app-brand {
   display: flex;
   align-items: center;
-  width: 100%;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-/* 十个分区同页共存，靠 .on 切显隐：切页不重建 DOM，已填的表单不会丢 */
-.page {
-  display: none;
-}
-.page.on {
-  display: block;
-}
-
-.page > * + * {
-  margin-top: 16px;
-}
-.stack > * + * {
-  margin-top: 12px;
-}
-
-/* 顶部操作条 */
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-/* 指标网格：卡片等宽，窄屏自动降列 */
-.kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 12px;
+  height: 64px;
+  padding: 0 16px;
+  flex: 0 0 auto;
 }
 
-/* 数字列右对齐，金额/百分比便于纵向比对 */
-.mdui-table th.num,
-.mdui-table td.num {
-  text-align: right;
+.app-brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+  background: #3f51b5;
 }
 
-/* 行内操作按钮之间留 4px */
-.mdui-table td .mdui-btn {
+.app-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+  min-width: 0;
+}
+
+.app-brand-text b {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.app-brand-text span {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.54);
+}
+
+.app-nav {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 8px;
+}
+
+/* 图标与文字都由 mdui 的 .mdui-list-item-icon / .mdui-list-item-content 定位，
+   这里只保证整行可点、文字不换行溢出 */
+.app-nav .mdui-list-item {
+  padding-right: 16px;
+}
+
+.app-nav .mdui-list-item-content {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-nav-foot {
+  flex: 0 0 auto;
+  padding: 12px 16px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.38);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* --------------------------------------------------------------------------
+   顶栏
+   -------------------------------------------------------------------------- */
+.app-title {
+  font-size: 16px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-crumb {
+  font-size: 13px;
+  opacity: 0.85;
   margin-right: 4px;
-}
-.mdui-table td .mdui-btn:last-child {
-  margin-right: 0;
-}
-
-/* 表格里的单元格不换行，宽表交给 .mdui-table-fluid 横向滚动 */
-.mdui-table td,
-.mdui-table th {
   white-space: nowrap;
 }
 
-/* 顶栏右侧的页名与管理员名 */
-.app-page-title {
-  margin-right: 12px;
-  opacity: 0.85;
-}
 .app-who {
-  margin-right: 8px;
-  opacity: 0.75;
   font-size: 13px;
+  opacity: 0.85;
+  margin: 0 12px 0 4px;
+  white-space: nowrap;
 }
 
-/* 登录页居中卡片 */
-.login-wrap {
+/* --------------------------------------------------------------------------
+   主体与分区
+   -------------------------------------------------------------------------- */
+.app-main {
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.app-page {
+  display: none;
+}
+
+.app-page.on {
+  display: block;
+}
+
+.app-page-head {
   display: flex;
-  justify-content: center;
-  padding: 12vh 16px 0;
-}
-.login-wrap .mdui-card {
-  width: 100%;
-  max-width: 380px;
-}
-.login-sub {
-  opacity: 0.65;
-  font-size: 13px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   margin: 4px 0 16px;
 }
-.login-err {
-  min-height: 16px;
-  font-size: 12px;
-  color: #d32f2f;
+
+.app-page-title {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
-/* 对话框里的下拉选择用原生 select，避免多引一个组件 */
-.app-select {
-  width: 100%;
-  padding: 8px 0;
-  border: 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.42);
-  background: transparent;
-  font: inherit;
-  outline: none;
+.app-page-desc {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.54);
 }
 
-/* 指标卡：mdui 没有 KPI 卡这种粒度，这里只用 mdui-card 的皮肤加内边距 */
-.kpi {
-  padding: 12px;
+.app-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
 }
-.kpi-label {
+
+/* --------------------------------------------------------------------------
+   卡片与指标
+   -------------------------------------------------------------------------- */
+.app-card {
+  margin-bottom: 16px;
+}
+
+.app-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 16px 16px 0;
+}
+
+.app-card-title {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.app-card-sub {
   font-size: 12px;
-  opacity: 0.7;
+  color: rgba(0, 0, 0, 0.54);
 }
-.kpi-value {
-  font-size: 18px;
-  font-weight: 600;
+
+.app-card-body {
+  padding: 16px;
+}
+
+/* 卡片里再放小卡片会显得套娃：内层指标卡去掉阴影，只留一条细边 */
+.app-card-body .app-kpi {
+  box-shadow: none;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.app-card-body .app-kpi-grid {
+  margin-bottom: 0;
+}
+
+.app-card-body > .mdui-btn:only-of-type,
+.app-card-body > button:last-child {
   margin-top: 4px;
 }
 
-/* 表格行内操作按钮：比普通 mdui-btn 更紧凑，避免一行被按钮撑太宽 */
-.row-btn {
-  min-width: 0;
-  padding: 0 8px;
-  height: 26px;
-  line-height: 26px;
-  font-size: 12px;
+.app-card-head .app-toolbar {
+  margin-left: auto;
 }
-.row-btn-danger {
+
+.app-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.app-kpi {
+  padding: 14px 16px;
+}
+
+.app-kpi-label {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.54);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-kpi-value {
+  margin-top: 6px;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  /* 指标卡里的数值一律单行：金额已用「亿 / 万」压缩，不需要再折行 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-kpi-value.is-pos {
   color: #d32f2f;
 }
 
-/* 配置项卡片 */
-.cfg-item {
-  padding: 12px;
-}
-.cfg-label {
-  font-weight: 600;
-}
-.cfg-key {
-  font-size: 11px;
-  opacity: 0.6;
-  margin: 2px 0 8px;
-}
-.cfg-note {
-  font-size: 11px;
-  opacity: 0.6;
-  margin-top: 6px;
-}
-/* 未保存的配置项标红，提示「这一项改过但还没提交」 */
-.cfg-dirty {
-  border-bottom-color: #d32f2f !important;
+.app-kpi-value.is-neg {
+  color: #388e3c;
 }
 
-/* 数据初始化：一行一个开关 */
-.seed-row {
+/* --------------------------------------------------------------------------
+   表格
+   -------------------------------------------------------------------------- */
+table.mdui-table {
+  min-width: 100%;
+  white-space: nowrap;
+}
+
+table.mdui-table td.num,
+table.mdui-table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+table.mdui-table td.ops {
+  white-space: nowrap;
+}
+
+.row-btn {
+  margin: 0 4px 0 0;
+}
+
+.row-btn:last-child {
+  margin-right: 0;
+}
+
+.app-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.54);
+}
+
+/* --------------------------------------------------------------------------
+   表单控件
+   -------------------------------------------------------------------------- */
+/* 弹窗与配置项里的原生控件：只做最基础的边框与内边距，
+   外观尽量贴近 mdui 输入框，不引入品牌色 */
+.app-select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 14px;
+  font-family: inherit;
+  color: rgba(0, 0, 0, 0.87);
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 4px;
+  outline: none;
+}
+
+.app-select:focus {
+  border-color: #3f51b5;
+}
+
+.app-field {
+  margin-bottom: 12px;
+}
+
+.app-field-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.54);
+}
+
+.app-field-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.38);
+}
+
+.app-inline {
   display: flex;
-  align-items: center;
   gap: 12px;
 }
-.seed-label {
-  min-width: 120px;
-  font-size: 14px;
+
+.app-inline > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.mdui-dialog-content .app-inline {
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   系统配置网格
+   -------------------------------------------------------------------------- */
+.app-cfg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+
+.app-cfg {
+  padding: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 4px;
+}
+
+.app-cfg-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.app-cfg-key {
+  margin: 2px 0 8px;
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: rgba(0, 0, 0, 0.38);
+  word-break: break-all;
+}
+
+.app-cfg-note {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.app-cfg-dirty {
+  border-color: #3f51b5;
+}
+
+/* --------------------------------------------------------------------------
+   登录页
+   -------------------------------------------------------------------------- */
+.app-login {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background: #eceff3;
+}
+
+.app-login[hidden] {
+  display: none;
+}
+
+.app-login-card {
+  width: 100%;
+  max-width: 360px;
+}
+
+.app-login-card .mdui-card-primary-title {
+  font-size: 18px;
+}
+
+.app-login-card .mdui-card-content {
+  padding-top: 8px;
+}
+
+.app-login-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.app-login-err {
+  min-height: 18px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #d32f2f;
+}
+
+/* --------------------------------------------------------------------------
+   其它
+   -------------------------------------------------------------------------- */
+.app-loading,
+.app-error {
+  padding: 16px;
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.54);
+}
+
+.app-error {
+  color: #d32f2f;
+}
+
+.app-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 0 16px 16px;
+}
+
+@media (min-width: 1024px) {
+  .app-main {
+    padding: 24px;
+  }
 }

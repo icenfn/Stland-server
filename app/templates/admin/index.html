@@ -1,134 +1,165 @@
 {% extends "admin/base.html" %}
+{% block title %}{{ (admin and admin.display_name) or 'Stland 运营后台' }}{% endblock %}
+
 {% block body %}
-{% include "admin/login.html" %}
 
-<div id="app" hidden>
-  {# 顶栏：mdui v1 用 .mdui-appbar-fixed + .mdui-toolbar 组合，自带高度与阴影 #}
-  <div class="mdui-appbar mdui-appbar-fixed">
-    <div class="mdui-toolbar mdui-color-theme">
-      <button class="mdui-btn mdui-btn-icon" id="navToggle" aria-label="打开导航">
-        <i class="mdui-icon material-icons">menu</i>
-      </button>
-      <span class="mdui-typo-title">Stland 运营后台</span>
-      <div class="mdui-toolbar-spacer"></div>
-      <span id="pageTitle" class="app-page-title"></span>
-      <span id="who" class="app-who"></span>
-      <button class="mdui-btn mdui-btn-icon" id="logoutBtn" aria-label="退出登录">
-        <i class="mdui-icon material-icons">logout</i>
-      </button>
-    </div>
+{# ------------------------------------------------------------------ 顶栏 #}
+<div class="mdui-appbar mdui-appbar-fixed">
+  <div class="mdui-toolbar mdui-color-theme">
+    <button class="mdui-btn mdui-btn-icon" id="navToggle" aria-label="展开导航">
+      <i class="mdui-icon material-icons">menu</i>
+    </button>
+    <span class="app-crumb">Stland</span>
+    <span class="app-title" id="pageTitle">总览</span>
+    <div class="mdui-toolbar-spacer"></div>
+    <span class="app-who" id="who">--</span>
+    <button class="mdui-btn mdui-btn-icon" id="logoutBtn" aria-label="退出登录" title="退出登录">
+      <i class="mdui-icon material-icons">exit_to_app</i>
+    </button>
   </div>
-
-  {# 抽屉导航：.mdui-drawer 自带固定定位与滑出动画，宽屏常驻、窄屏点菜单键滑出 #}
-  <div class="mdui-drawer" id="nav">
-    <div class="mdui-list">
-      {% for item in nav %}
-      <button class="mdui-list-item mdui-ripple nav-item{% if loop.first %} mdui-list-item-active{% endif %}"
-        data-page="{{ item.key }}">
-        <i class="mdui-list-item-icon mdui-icon material-icons">{{ item.icon }}</i>
-        <div class="mdui-list-item-content">{{ item.label }}</div>
-      </button>
-      {% endfor %}
-    </div>
-  </div>
-
-  <main class="app-main">
-    {% for item in nav %}
-    {% include "admin/pages/" ~ item.key ~ ".html" %}
-    {% endfor %}
-  </main>
 </div>
 
-{# 三处都是多字段表单，用 mdui 对话框承载；按钮上的 mdui-dialog-close 会由组件自动接管关闭 #}
+{# ---------------------------------------------------------------- 侧边栏 #}
+{# 用 a 而不是 button：button 自带 buttonface 背景、2px outset 边框与 text-align:center，
+   会把 .mdui-list-item 的 flex 布局和图标位置全部打乱 —— 之前图标跑偏就是这个原因 #}
+<div class="mdui-drawer mdui-drawer-left app-drawer" id="nav">
+  <div class="app-brand">
+    <div class="app-brand-mark">S</div>
+    <div class="app-brand-text">
+      <b>Stland 运营后台</b>
+      <span>模拟交易 · 管理端</span>
+    </div>
+  </div>
+
+  <nav class="app-nav">
+    {% for item in nav %}
+    <a href="javascript:;" class="mdui-list-item mdui-ripple nav-item{% if loop.first %} mdui-list-item-active{% endif %}"
+       data-page="{{ item.key }}" data-label="{{ item.label }}">
+      <i class="mdui-list-item-icon mdui-icon material-icons">{{ item.icon }}</i>
+      <div class="mdui-list-item-content">{{ item.label }}</div>
+    </a>
+    {% endfor %}
+  </nav>
+
+  <div class="app-nav-foot">mdui 1.x · v1.0.0</div>
+</div>
+
+{# ------------------------------------------------------------------ 正文 #}
+<main class="app-main">
+  {% include "admin/pages/overview.html" %}
+  {% include "admin/pages/retail.html" %}
+  {% include "admin/pages/institution.html" %}
+  {% include "admin/pages/admins.html" %}
+  {% include "admin/pages/stocks.html" %}
+  {% include "admin/pages/engine.html" %}
+  {% include "admin/pages/risk.html" %}
+  {% include "admin/pages/config.html" %}
+  {% include "admin/pages/data.html" %}
+  {% include "admin/pages/ops.html" %}
+</main>
+
+{# ---------------------------------------------------------------- 对话框 #}
 <div class="mdui-dialog" id="dlgAccount">
-  <div class="mdui-dialog-title">新增交易账户</div>
+  <div class="mdui-dialog-title" id="acTitle">新建交易账户</div>
   <div class="mdui-dialog-content">
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">用户名</label>
-      <input class="mdui-textfield-input" id="acUsername" />
+    <div class="app-field">
+      <label class="app-field-label" for="acUsername">登录名</label>
+      <input class="app-select" id="acUsername" autocomplete="off" placeholder="2-40 位字母或数字" />
     </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">昵称</label>
-      <input class="mdui-textfield-input" id="acDisplay" />
+    <div class="app-field">
+      <label class="app-field-label" for="acDisplay">显示名称</label>
+      <input class="app-select" id="acDisplay" autocomplete="off" placeholder="留空则用登录名" />
     </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">初始资金（元）</label>
-      <input class="mdui-textfield-input" id="acCash" type="number" value="1000000" />
+    <div class="app-inline">
+      <div class="app-field">
+        <label class="app-field-label" for="acRole">账户类型</label>
+        <select class="app-select" id="acRole">
+          <option value="retail">零售</option>
+          <option value="institution">机构</option>
+        </select>
+      </div>
+      <div class="app-field">
+        <label class="app-field-label" for="acCash">初始可用资金</label>
+        <input class="app-select" id="acCash" type="number" step="1000" value="1000000" />
+      </div>
     </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">角色</label>
-      <select class="app-select" id="acRole">
-        <option value="retail">零售</option>
-        <option value="institution">机构</option>
-      </select>
-    </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">登录口令（至少 8 位）</label>
-      <input class="mdui-textfield-input" id="acPassword" type="password" />
+    <div class="app-field">
+      <label class="app-field-label" for="acPassword">初始口令</label>
+      <input class="app-select" id="acPassword" type="password" autocomplete="new-password" placeholder="至少 6 位" />
     </div>
   </div>
   <div class="mdui-dialog-actions">
-    <button class="mdui-btn mdui-ripple mdui-dialog-close">取消</button>
+    <button class="mdui-btn mdui-ripple" id="acCancel">取消</button>
     <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="acSubmit">创建</button>
   </div>
 </div>
 
 <div class="mdui-dialog" id="dlgAdmin">
-  <div class="mdui-dialog-title">新增管理员</div>
+  <div class="mdui-dialog-title">新建管理员</div>
   <div class="mdui-dialog-content">
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">用户名</label>
-      <input class="mdui-textfield-input" id="adUsername" />
+    <div class="app-field">
+      <label class="app-field-label" for="adUsername">登录名</label>
+      <input class="app-select" id="adUsername" autocomplete="off" />
     </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">昵称</label>
-      <input class="mdui-textfield-input" id="adDisplay" />
+    <div class="app-field">
+      <label class="app-field-label" for="adDisplay">显示名称</label>
+      <input class="app-select" id="adDisplay" autocomplete="off" placeholder="留空则用登录名" />
     </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">登录口令（至少 8 位）</label>
-      <input class="mdui-textfield-input" id="adPassword" type="password" />
+    <div class="app-field">
+      <label class="app-field-label" for="adPassword">初始口令</label>
+      <input class="app-select" id="adPassword" type="password" autocomplete="new-password" placeholder="至少 8 位" />
     </div>
   </div>
   <div class="mdui-dialog-actions">
-    <button class="mdui-btn mdui-ripple mdui-dialog-close">取消</button>
+    <button class="mdui-btn mdui-ripple" id="adCancel">取消</button>
     <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="adSubmit">创建</button>
   </div>
 </div>
 
 <div class="mdui-dialog" id="dlgStock">
-  <div class="mdui-dialog-title">标的参数</div>
+  <div class="mdui-dialog-title" id="stTitle">新增标的</div>
   <div class="mdui-dialog-content">
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">代码（如 600519.SH）</label>
-      <input class="mdui-textfield-input" id="stCode" />
+    <div class="app-inline">
+      <div class="app-field">
+        <label class="app-field-label" for="stCode">代码</label>
+        <input class="app-select" id="stCode" autocomplete="off" placeholder="如 600519" />
+      </div>
+      <div class="app-field">
+        <label class="app-field-label" for="stName">名称</label>
+        <input class="app-select" id="stName" autocomplete="off" />
+      </div>
     </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">名称</label>
-      <input class="mdui-textfield-input" id="stName" />
+    <div class="app-inline">
+      <div class="app-field">
+        <label class="app-field-label" for="stBoard">板块</label>
+        <select class="app-select" id="stBoard">
+          <option value="主板">主板（±10%）</option>
+          <option value="创业板">创业板（±20%）</option>
+          <option value="科创板">科创板（±20%）</option>
+          <option value="北交所">北交所（±30%）</option>
+        </select>
+      </div>
+      <div class="app-field">
+        <label class="app-field-label" for="stIndustry">行业</label>
+        <input class="app-select" id="stIndustry" autocomplete="off" />
+      </div>
     </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">板块</label>
-      <input class="mdui-textfield-input" id="stBoard" />
+    <div class="app-inline">
+      <div class="app-field">
+        <label class="app-field-label" for="stPrice">基准价（昨收）</label>
+        <input class="app-select" id="stPrice" type="number" step="0.01" value="10" />
+      </div>
+      <div class="app-field">
+        <label class="app-field-label" for="stFloat">流通股本（股）</label>
+        <input class="app-select" id="stFloat" type="number" step="1000000" value="500000000" />
+      </div>
     </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">行业</label>
-      <input class="mdui-textfield-input" id="stIndustry" />
-    </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">昨收</label>
-      <input class="mdui-textfield-input" id="stPrevClose" type="number" />
-    </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">涨停价</label>
-      <input class="mdui-textfield-input" id="stLimitUp" type="number" />
-    </div>
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">跌停价</label>
-      <input class="mdui-textfield-input" id="stLimitDown" type="number" />
+    <div class="app-field-hint">
+      涨跌停价由板块比例自动推算，无需手填；代码为唯一键，编辑时不可改动。
     </div>
   </div>
   <div class="mdui-dialog-actions">
-    <button class="mdui-btn mdui-ripple mdui-dialog-close">取消</button>
+    <button class="mdui-btn mdui-ripple" id="stCancel">取消</button>
     <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="stSubmit">保存</button>
   </div>
 </div>
@@ -136,16 +167,23 @@
 <div class="mdui-dialog" id="dlgAdjust">
   <div class="mdui-dialog-title">调整可用资金</div>
   <div class="mdui-dialog-content">
-    <div class="mdui-textfield">
-      <label class="mdui-textfield-label">目标可用资金（元）</label>
-      <input class="mdui-textfield-input" id="ajCash" type="number" />
+    <div class="app-field-hint" id="ajWho">--</div>
+    <div class="app-field">
+      <label class="app-field-label" for="ajAmount">金额（正数入金，负数出金）</label>
+      <input class="app-select" id="ajAmount" type="number" step="1000" placeholder="如 100000 或 -50000" />
+    </div>
+    <div class="app-field">
+      <label class="app-field-label" for="ajRemark">备注</label>
+      <input class="app-select" id="ajRemark" autocomplete="off" placeholder="留空记为「管理端资金调整」" />
     </div>
   </div>
   <div class="mdui-dialog-actions">
-    <button class="mdui-btn mdui-ripple mdui-dialog-close">取消</button>
-    <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="ajSubmit">确定</button>
+    <button class="mdui-btn mdui-ripple" id="ajCancel">取消</button>
+    <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="ajSubmit">提交</button>
   </div>
 </div>
+
+{% include "admin/login.html" %}
 {% endblock %}
 
 {% block scripts %}

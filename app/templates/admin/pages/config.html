@@ -1,10 +1,15 @@
-{# 系统配置 #}
-<section class="page" id="page-config">
-  <div class="toolbar">
-    <button class="mdui-btn mdui-ripple mdui-btn-raised mdui-color-theme-accent" id="saveCfg"><i class="mdui-icon material-icons">save</i>保存修改</button>
-    <button class="mdui-btn mdui-ripple" id="resetCfg"><i class="mdui-icon material-icons">settings_backup_restore</i>恢复默认</button>
-    <button class="mdui-btn mdui-ripple" id="refreshCfg"><i class="mdui-icon material-icons">refresh</i>重新读取</button>
+<section class="app-page" id="page-config">
+  <div class="app-page-head">
+    <div class="app-page-title">系统配置</div>
+    <div class="app-page-desc">运行期参数，保存后立即生效</div>
+    <div class="app-toolbar">
+      <button class="mdui-btn mdui-ripple" id="refreshCfg">刷新</button>
+      <button class="mdui-btn mdui-ripple" id="resetCfg">恢复默认</button>
+      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="saveCfg">保存修改</button>
+    </div>
   </div>
 
-  <div class="kpi-grid" id="cfgGrid"></div>
+  <div class="mdui-card">
+    <div class="app-cfg-grid" id="cfgGrid"></div>
+  </div>
 </section>

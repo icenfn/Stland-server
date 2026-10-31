@@ -1,840 +1,1087 @@
-/* ==================================================================
- * Stland 运营后台脚本
- *
- * 界面全部由 mdui 2 组件构成：顶栏、抽屉、列表、卡片、表格、对话框、
- * 输入框、开关都直接使用 <mdui-*> 标签与它自带的 .mdui-table 皮肤，
- * 不再手写任何配色/圆角/阴影样式，页面里只剩分区显隐和间距。
- *
- * 这里只负责三件事：取数、把数据塞进组件、把用户操作发给接口。
- * ================================================================== */
+/* ==========================================================================
+   Stland 运营后台 · 前端脚本（mdui 1.x）
 
-const TOKEN_KEY = 'stland.admin.token';
-const USER_KEY = 'stland.admin.user';
+   与 mdui 1.x 的对接要点：
+   - 抽屉与对话框都要实例化：new mdui.Drawer(el) / new mdui.Dialog(el)
+   - mdui.confirm 是回调式 (content, title, onConfirm, onCancel)，不是 Promise
+   - 导航高亮用 mdui-list-item-active 类
+   ========================================================================== */
+(function () {
+  'use strict';
 
-/** 组件实例要等自定义元素升级完成才能取到属性，先统一拿元素 */
-const $ = (id) => document.getElementById(id);
+  var TOKEN_KEY = 'stland.admin.token';
 
-const state = {
-  page: 'overview',
-  accounts: {},
-  cfg: [],
-  cfgDirty: {},
-  engine: null,
-  adjustAccount: null,
-  editStock: null,
-};
+  var state = {
+    page: 'overview',
+    admin: null,
+    cfg: [],
+    cfgDirty: {},
+    stocks: [],
+    accounts: {},
+    editingStock: null,
+    adjustTarget: null,
+    loginRequired: false,
+  };
 
-const token = () => localStorage.getItem(TOKEN_KEY) || '';
-
-/* ------------------------------------------------------------------ *
- * 取数与提示
- * ------------------------------------------------------------------ */
-async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token() ? { Authorization: 'Bearer ' + token() } : {}),
-      ...(opts.headers || {}),
-    },
-  });
-  let body = null;
-  try { body = await res.json(); } catch { body = null; }
-  if (!res.ok) {
-    if (res.status === 401 && path !== '/api/admin/login') logout();
-    const d = body && body.detail;
-    const msg = typeof d === 'string' ? d : (d && d.message) || ('请求失败 ' + res.status);
-    throw new Error(msg);
+  /* ---------------------------------------------------------------- 基础工具 */
+  function $(id) {
+    return document.getElementById(id);
   }
-  return body;
-}
 
-/** 提示：用 mdui 的 snackbar；万一组件没起来就退回原生 alert */
-function notify(text) {
-  try {
+  function esc(v) {
+    return String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function pick(obj, keys, fallback) {
+    if (!obj) return fallback;
+    for (var i = 0; i < keys.length; i += 1) {
+      var v = obj[keys[i]];
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return fallback;
+  }
+
+  function num(v) {
+    if (v === null || v === undefined || v === '') return '--';
+    var n = Number(v);
+    if (!isFinite(n)) return '--';
+    return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  /* 指标卡里的金额用短单位，避免一长串数字把卡片撑爆或折断：
+     18.34 亿 / 7,341.82 万。表格里仍然用完整的 num()。 */
+  function money(v) {
+    if (v === null || v === undefined || v === '') return '--';
+    var n = Number(v);
+    if (!isFinite(n)) return '--';
+    var abs = Math.abs(n);
+    if (abs >= 1e8) return (n / 1e8).toFixed(2) + ' 亿';
+    if (abs >= 1e4) return (n / 1e4).toFixed(2) + ' 万';
+    return n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  }
+
+  function int(v) {
+    if (v === null || v === undefined || v === '') return '--';
+    var n = Number(v);
+    if (!isFinite(n)) return '--';
+    return Math.round(n).toLocaleString('zh-CN');
+  }
+
+  function pct(v) {
+    if (v === null || v === undefined || v === '') return '--';
+    var n = Number(v);
+    if (!isFinite(n)) return '--';
+    return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+  }
+
+  function ts(v) {
+    var n = Number(v);
+    if (!n) return '--';
+    var d = new Date(n * 1000);
+    var p = function (x) { return String(x).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+      ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  function kpi(label, value, cls) {
+    return '<div class="mdui-card app-kpi">' +
+      '<div class="app-kpi-label">' + esc(label) + '</div>' +
+      '<div class="app-kpi-value' + (cls ? ' ' + cls : '') + '">' + esc(value) + '</div>' +
+      '</div>';
+  }
+
+  function emptyRow(colspan, text) {
+    return '<tr><td colspan="' + colspan + '"><div class="app-empty">' + esc(text) + '</div></td></tr>';
+  }
+
+  function rowBtn(text, attrs, danger) {
+    return '<button class="mdui-btn mdui-btn-dense mdui-ripple row-btn' +
+      (danger ? ' mdui-text-color-red' : '') + '" ' + attrs + '>' + esc(text) + '</button>';
+  }
+
+  function notify(message) {
     if (window.mdui && typeof mdui.snackbar === 'function') {
-      mdui.snackbar({ message: String(text) });
+      mdui.snackbar({ message: String(message), timeout: 2600 });
+    } else {
+      window.alert(message);
+    }
+  }
+
+  function ask(text, title) {
+    return new Promise(function (resolve) {
+      if (window.mdui && typeof mdui.confirm === 'function') {
+        try {
+          mdui.confirm(text, title || '请确认',
+            function () { resolve(true); },
+            function () { resolve(false); });
+          return;
+        } catch (e) {
+          /* 落到原生确认 */
+        }
+      }
+      resolve(window.confirm(text));
+    });
+  }
+
+  /* ------------------------------------------------------------------ 令牌 */
+  function token() {
+    try { return window.localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+  }
+
+  function setToken(t) {
+    try {
+      if (t) window.localStorage.setItem(TOKEN_KEY, t);
+      else window.localStorage.removeItem(TOKEN_KEY);
+    } catch (e) { /* 隐私模式忽略 */ }
+  }
+
+  /* ------------------------------------------------------------------ 请求 */
+  function api(path, options) {
+    var opts = options || {};
+    var headers = { Accept: 'application/json' };
+    if (opts.body) headers['Content-Type'] = 'application/json';
+    var t = token();
+    if (t) headers.Authorization = 'Bearer ' + t;
+
+    return fetch(path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body || undefined,
+    }).then(function (res) {
+      return res.text().then(function (raw) {
+        var data = null;
+        if (raw) {
+          try { data = JSON.parse(raw); } catch (e) { data = null; }
+        }
+        if (!res.ok) {
+          var detail = data && data.detail;
+          var msg = '';
+          if (detail && typeof detail === 'object') msg = detail.message || detail.code || '';
+          else if (typeof detail === 'string') msg = detail;
+          else if (data && data.message) msg = data.message;
+          if (!msg) msg = '请求失败（HTTP ' + res.status + '）';
+          var err = new Error(msg);
+          err.status = res.status;
+          throw err;
+        }
+        return data;
+      });
+    }).catch(function (err) {
+      if (err.status === 401) {
+        setToken('');
+        showLogin('登录已过期，请重新登录');
+      }
+      throw err;
+    });
+  }
+
+  /* -------------------------------------------------------------- mdui 封装 */
+  var drawer = null;
+  var dialogs = {};
+
+  function navDrawer() {
+    if (!drawer && window.mdui) drawer = new mdui.Drawer('#nav');
+    return drawer;
+  }
+
+  function dlg(id) {
+    if (!dialogs[id] && window.mdui) dialogs[id] = new mdui.Dialog('#' + id);
+    return dialogs[id];
+  }
+
+  function openDlg(id) {
+    var d = dlg(id);
+    if (d) d.open();
+  }
+
+  function closeDlg(id) {
+    var d = dlg(id);
+    if (d) d.close();
+  }
+
+  function isWide() {
+    return window.innerWidth >= 1024;
+  }
+
+  /* 抽屉的开关自己记状态：宽屏才让正文让出 240px。
+     mdui 1.x 的让位靠 body 上的 mdui-drawer-body-left，必须跟着开关一起切，
+     否则宽屏收起抽屉后右侧会留一条 240px 的空白。 */
+  var drawerOpen = true;
+
+  function setDrawer(open) {
+    drawerOpen = !!open;
+    var d = navDrawer();
+    if (d) {
+      if (drawerOpen) d.open();
+      else d.close();
+    }
+    document.body.classList.toggle('mdui-drawer-body-left', drawerOpen && isWide());
+  }
+
+  function toggleDrawer() {
+    setDrawer(!drawerOpen);
+  }
+
+  /* ---------------------------------------------------------------- 登录页 */
+  function showLogin(message) {
+    state.loginRequired = true;
+    var box = $('login');
+    if (box) box.hidden = false;
+    if (message) $('loginErr').textContent = message;
+  }
+
+  function hideLogin() {
+    state.loginRequired = false;
+    var box = $('login');
+    if (box) box.hidden = true;
+    $('loginErr').textContent = '';
+  }
+
+  function doLogin() {
+    var username = $('loginUser').value.trim();
+    var password = $('loginPass').value;
+    if (!username || !password) {
+      $('loginErr').textContent = '请填写登录名与口令';
       return;
     }
-  } catch { /* 落到兜底 */ }
-  window.alert(String(text));
-}
-
-/** 确认框：mdui.confirm 返回 Promise，原生 confirm 是同步值，这里统一成 Promise<boolean> */
-function ask(text, title = '请确认') {
-  try {
-    if (window.mdui && typeof mdui.confirm === 'function') {
-      // mdui 1.x 的 confirm 是回调式：confirm(text, title, onConfirm, onCancel, options)
-      return new Promise((resolve) => {
-        mdui.confirm(
-          String(text),
-          title,
-          () => resolve(true),
-          () => resolve(false),
-          { confirmText: '确定', cancelText: '取消' },
-        );
-      });
-    }
-  } catch { /* 落到兜底 */ }
-  return Promise.resolve(window.confirm(String(text)));
-}
-
-/* ------------------------------------------------------------------ *
- * 格式化
- * ------------------------------------------------------------------ */
-const num = (v, d = 2) => (v == null || isNaN(v) ? '--' : Number(v).toLocaleString('zh-CN', {
-  minimumFractionDigits: d, maximumFractionDigits: d,
-}));
-const int = (v) => (v == null || isNaN(v) ? '--' : Number(v).toLocaleString('zh-CN'));
-const pct = (v) => (v == null || isNaN(v) ? '--' : (Number(v) > 0 ? '+' : '') + Number(v).toFixed(2) + '%');
-const dt = (ts) => {
-  if (!ts) return '--';
-  const d = new Date(ts < 1e11 ? ts * 1000 : ts);
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-};
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
-  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-));
-
-const RISK_LABEL = { 0: '未测评', 1: '保守型', 2: '稳健型', 3: '进取型' };
-const STATUS_LABEL = { active: '正常', frozen: '冻结', closed: '注销' };
-const ROLE_LABEL = { retail: '零售', institution: '机构' };
-
-/** 指标小卡：mdui-card 承载，样式全部来自组件 */
-const kpiCard = (label, value) => `
-  <div class="mdui-card kpi">
-    <div class="kpi-label">${esc(label)}</div>
-    <div class="kpi-value">${esc(value ?? '--')}</div>
-  </div>`;
-
-/** 表格里的行内操作按钮 */
-const rowBtn = (text, attr, extra = '', danger = false) =>
-  `<button class="mdui-btn mdui-ripple row-btn${danger ? ' row-btn-danger' : ''}" ${attr} ${extra}>${esc(text)}</button>`;
-
-/** 空态/加载态占位行 */
-const emptyRow = (cols, text) =>
-  `<tr><td colspan="${cols}" style="text-align:center; opacity:.6; padding:24px">${esc(text)}</td></tr>`;
-
-/* ------------------------------------------------------------------ *
- * 登录 / 登出
- * ------------------------------------------------------------------ */
-$('loginForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const btn = $('loginBtn');
-  const err = $('loginErr');
-  err.textContent = '';
-  btn.disabled = true;
-  try {
-    // 管理员走独立接口与独立表
-    const res = await api('/api/admin/login', {
+    var btn = $('loginBtn');
+    btn.disabled = true;
+    $('loginErr').textContent = '';
+    api('/api/admin/login', {
       method: 'POST',
-      body: JSON.stringify({ username: $('username').value.trim(), password: $('password').value }),
+      body: JSON.stringify({ username: username, password: password }),
+    }).then(function (d) {
+      var t = d && d.token;
+      var raw = typeof t === 'string' ? t : pick(t, ['access_token', 'token'], '');
+      if (!raw) throw new Error('登录响应缺少令牌');
+      setToken(raw);
+      state.admin = (d && d.admin) || null;
+      $('loginPass').value = '';
+      hideLogin();
+      enterApp();
+    }).catch(function (err) {
+      $('loginErr').textContent = err.message;
+    }).then(function () {
+      btn.disabled = false;
     });
-    const t = res && res.token;
-    const accessToken = typeof t === 'string' ? t : (t && t.access_token);
-    if (!accessToken) throw new Error('登录响应异常：未拿到访问令牌');
-    localStorage.setItem(TOKEN_KEY, accessToken);
-    localStorage.setItem(USER_KEY, JSON.stringify(res.admin || {}));
-    enterApp(res.admin);
-  } catch (ex) {
-    err.textContent = ex.message;
-  } finally {
-    btn.disabled = false;
   }
-});
 
-function enterApp(admin) {
-  $('login').hidden = true;
-  $('app').hidden = false;
-  const a = admin || JSON.parse(localStorage.getItem(USER_KEY) || '{}');
-  $('who').textContent = a.display_name || a.username || '';
-  // 宽屏抽屉默认常驻展开，窄屏收起等点菜单键；否则大屏左边会空一块
-  if (isNarrow()) drawer.close(); else drawer.open();
-  // 刷新页面时 hash 还在，就该停在上次看的分区，而不是被拉回总览
-  const first = location.hash.replace(/^#/, '');
-  showPage(PAGES[first] ? first : 'overview', false);
-}
-
-function logout() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
-  $('app').hidden = true;
-  $('login').hidden = false;
-}
-
-$('logoutBtn').addEventListener('click', async () => {
-  if (await ask('确认退出登录？', '退出')) logout();
-});
-
-/* ------------------------------------------------------------------ *
- * 抽屉导航
- *
- * 十个分区排成横向页签时，窄屏会挤成两行小字，也看不出分组；
- * 换成纵向抽屉后宽屏常驻、窄屏滑出，正文宽度不被挤压。
- * 单一状态源 state.page：列表高亮、分区显隐、URL hash 都由它派生。
- * ------------------------------------------------------------------ */
-const PAGES = {
-  overview: loadOverview,
-  retail: () => loadAccounts('retail'),
-  institution: () => loadAccounts('institution'),
-  admins: loadAdmins,
-  stocks: () => { loadStocks(); loadIndices(); },
-  engine: loadEngine,
-  risk: loadRisk,
-  config: loadConfig,
-  data: loadSeedStatus,
-  ops: loadOps,
-};
-
-const PAGE_TITLE = {
-  overview: '总览', retail: '零售账户', institution: '机构账户', admins: '管理员',
-  stocks: '标的与指数', engine: '模拟引擎', risk: '风险偏好', config: '系统配置',
-  data: '数据初始化', ops: '撮合质量',
-};
-
-const navEl = () => $('nav');
-
-/**
- * mdui 1.x 的组件是「先 new 出实例再调方法」，
- * 不像 2.x 那样直接改元素的属性。这里统一包一层，
- * 页面代码只表达「打开/关闭」，不关心底层怎么实现。
- */
-const drawer = new mdui.Drawer('#nav');
-const dialogs = {};
-function dlg(id) {
-  if (!dialogs[id]) dialogs[id] = new mdui.Dialog('#' + id);
-  return dialogs[id];
-}
-const isNarrow = () => window.matchMedia('(max-width: 1023px)').matches;
-
-function showPage(key, syncHash = true) {
-  if (!PAGES[key]) key = 'overview';
-  state.page = key;
-
-  document.querySelectorAll('.page').forEach((el) => {
-    el.classList.toggle('on', el.id === 'page-' + key);
-  });
-  navEl().querySelectorAll('.nav-item').forEach((el) => {
-    el.classList.toggle('mdui-list-item-active', el.dataset.page === key);
-  });
-  $('pageTitle').textContent = PAGE_TITLE[key] || '';
-
-  // 窄屏点完就收起抽屉；宽屏保持常驻侧栏
-  if (isNarrow()) drawer.close();
-
-  if (syncHash) history.replaceState(null, '', '#' + key);
-  PAGES[key]();
-}
-
-navEl().addEventListener('click', (e) => {
-  const item = e.target.closest('.nav-item');
-  if (!item || !item.dataset.page) return;
-  showPage(item.dataset.page);
-});
-
-$('navToggle').addEventListener('click', () => drawer.toggle());
-
-window.addEventListener('hashchange', () => {
-  const key = location.hash.replace(/^#/, '');
-  if (PAGES[key] && key !== state.page) showPage(key, false);
-});
-
-/* ------------------------------------------------------------------ *
- * 总览
- * ------------------------------------------------------------------ */
-async function loadOverview() {
-  $('ovKpi').innerHTML = emptyRow(1, '加载中…');
-  try {
-    const d = await api('/api/admin/dashboard');
-    const k = d.kpi || {};
-    const items = [
-      ['交易账户', k.user_count], ['零售', k.retail_count], ['机构', k.institution_count],
-      ['管理员', k.admin_count], ['正常', k.active_users], ['冻结', k.frozen_users],
-      ['总资产', num(k.total_asset)], ['今日委托', k.today_orders], ['今日成交', k.today_trades],
-      ['今日成交额', num(k.today_turnover)], ['挂单中', k.open_orders], ['自选条数', k.watch_items],
-    ];
-    $('ovKpi').innerHTML = items.map(([a, v]) => kpiCard(a, v ?? 0)).join('');
-
-    const s = d.session || {};
-    const market = [
-      ['交易模式', s.mode_label || s.mode || '--'],
-      ['当前时段', s.label || '--'],
-      ['交易日', s.trade_date || '--'],
-      ['可申报', s.can_trade ? '是' : '否'],
-      ['可撮合', s.is_open ? '是' : '否'],
-    ];
-    $('ovMarket').innerHTML = market.map(([a, v]) => kpiCard(a, v)).join('');
-  } catch (e) {
-    $('ovKpi').innerHTML = `<div style="opacity:.6">${esc(e.message)}</div>`;
+  function doLogout() {
+    ask('确认退出当前管理员账号？', '退出登录').then(function (ok) {
+      if (!ok) return;
+      setToken('');
+      state.admin = null;
+      showLogin('已退出登录');
+    });
   }
-}
-$('refreshOverview').addEventListener('click', loadOverview);
 
-/* ------------------------------------------------------------------ *
- * 账户（零售 / 机构）
- * ------------------------------------------------------------------ */
-async function loadAccounts(role) {
-  const isInst = role === 'institution';
-  const body = $(isInst ? 'instBody' : 'retailBody');
-  const countEl = $(isInst ? 'instTotal' : 'retailTotal');
-  const cols = isInst ? 8 : 9;
-  body.innerHTML = emptyRow(cols, '加载中…');
-  try {
-    const d = await api(`/api/admin/accounts?role=${role}`);
-    state.accounts[role] = d.items || [];
-    countEl.textContent = `共 ${d.total ?? 0} 个`;
-    if (!d.items.length) {
-      body.innerHTML = emptyRow(cols, '该分类下暂无账户');
-      return;
+  /* ------------------------------------------------------------------ 导航 */
+  var NAV_LOADER = {
+    overview: loadOverview,
+    retail: function () { return loadAccounts('retail'); },
+    institution: function () { return loadAccounts('institution'); },
+    admins: loadAdmins,
+    stocks: function () { return Promise.all([loadStocks(), loadIndices()]); },
+    engine: loadEngine,
+    risk: loadRisk,
+    config: loadConfig,
+    data: loadSeedStatus,
+    ops: loadOps,
+  };
+
+  function showPage(key, skipLoad) {
+    var items = document.querySelectorAll('.nav-item');
+    var label = key;
+    for (var i = 0; i < items.length; i += 1) {
+      var el = items[i];
+      var on = el.dataset.page === key;
+      el.classList.toggle('mdui-list-item-active', on);
+      if (on) label = el.dataset.label || key;
     }
-    body.innerHTML = d.items.map((a) => {
-      const pnl = a.floating_pnl;
-      const pnlStyle = pnl > 0 ? 'color: var(--mdui-color-error)'
-        : pnl < 0 ? 'color: var(--mdui-color-tertiary)' : '';
-      const actions = `
-        ${rowBtn('调资金', `data-fund="${a.id}"`, `data-name="${esc(a.username)}"`)}
-        ${rowBtn('重置口令', `data-pwd="${a.id}"`, `data-name="${esc(a.username)}"`)}
-        ${a.status === 'active'
-          ? rowBtn('冻结', `data-status="${a.id}"`, 'data-next="frozen"', true)
-          : rowBtn('解冻', `data-status="${a.id}"`, 'data-next="active"')}
-      `;
-      if (isInst) {
-        return `<tr>
-          <td>${esc(a.display_name || a.username)}<div style="font-size:11px;opacity:.6">${esc(a.username)}</div></td>
-          <td>${STATUS_LABEL[a.status] || a.status}</td>
-          <td class="num">${num(a.credit_limit)}</td>
-          <td class="num">${num(a.cash)}</td>
-          <td class="num">${num(a.market_value)}</td>
-          <td class="num">${num(a.total_asset)}</td>
-          <td>${actions}</td>
-        </tr>`;
+    var pages = document.querySelectorAll('.app-page');
+    for (var j = 0; j < pages.length; j += 1) {
+      pages[j].classList.toggle('on', pages[j].id === 'page-' + key);
+    }
+    $('pageTitle').textContent = label;
+    state.page = key;
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState(null, '', '#' + key);
+    }
+    if (!isWide()) setDrawer(false);
+    var loader = NAV_LOADER[key];
+    if (!skipLoad && typeof loader === 'function') loader();
+  }
+
+  /* ------------------------------------------------------------------ 总览 */
+  function loadOverview() {
+    $('ovKpi').innerHTML = '<div class="app-loading">加载中…</div>';
+    api('/api/admin/dashboard').then(function (d) {
+      var k = d.kpi || {};
+      $('ovKpi').innerHTML = [
+        kpi('交易账户', int(k.user_count)),
+        kpi('零售 / 机构', int(k.retail_count) + ' / ' + int(k.institution_count)),
+        kpi('管理员', int(k.admin_count)),
+        kpi('正常 / 冻结', int(k.active_users) + ' / ' + int(k.frozen_users)),
+        kpi('总资产', money(k.total_asset)),
+        kpi('今日委托', int(k.today_orders)),
+        kpi('今日成交', int(k.today_trades)),
+        kpi('今日成交额（元）', money(k.today_turnover)),
+        kpi('挂单中', int(k.open_orders)),
+        kpi('持仓行数', int(k.position_rows)),
+        kpi('自选条数', int(k.watch_items)),
+      ].join('');
+
+      var s = d.session || {};
+      var m = d.market || {};
+      $('ovSession').innerHTML = '<div class="app-kpi-grid">' +
+        kpi('交易时段', s.label || s.phase || '--') +
+        kpi('交易日', s.trade_date || '--') +
+        kpi('可交易', s.can_trade ? '是' : '否') +
+        kpi('上涨家数', int(pick(m, ['up'], '--'))) +
+        kpi('下跌家数', int(pick(m, ['down'], '--'))) +
+        '</div>';
+
+      var r = d.risk_distribution || {};
+      $('ovRisk').innerHTML = [
+        kpi('账户总数', int(r.total)),
+        kpi('未测评', int(r.unassessed)),
+        kpi('保守型', int(r.conservative)),
+        kpi('稳健型', int(r.balanced)),
+        kpi('进取型', int(r.aggressive)),
+      ].join('');
+    }).catch(function (e) {
+      $('ovKpi').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
+    });
+  }
+
+  /* -------------------------------------------------------------- 交易账户 */
+  var STATUS_LABEL = { active: '正常', frozen: '冻结', closed: '已注销' };
+  var ROLE_LABEL = { retail: '零售', institution: '机构' };
+
+  function riskLabel(level, assessed) {
+    if (!assessed || !level) return '未测评';
+    if (level <= 1) return '保守型';
+    if (level === 2) return '稳健型';
+    return '进取型';
+  }
+
+  function loadAccounts(role) {
+    var isRetail = role === 'retail';
+    var body = $(isRetail ? 'retailBody' : 'instBody');
+    var cols = isRetail ? 10 : 9;
+    body.innerHTML = emptyRow(cols, '加载中…');
+
+    var kw = $(isRetail ? 'retailSearch' : 'instSearch').value.trim();
+    var qs = '/api/admin/accounts?role=' + encodeURIComponent(role) +
+      (kw ? '&keyword=' + encodeURIComponent(kw) : '');
+
+    return api(qs).then(function (d) {
+      var rows = d.items || [];
+      state.accounts[role] = rows;
+      $(isRetail ? 'retailCount' : 'instCount').textContent =
+        '共 ' + (d.total === undefined ? rows.length : d.total) + ' 个账户';
+
+      if (!rows.length) {
+        body.innerHTML = emptyRow(cols, kw ? '没有匹配的账户' : '暂无账户，可点「新建账户」');
+        return;
       }
-      return `<tr>
-        <td>${esc(a.display_name || a.username)}<div style="font-size:11px;opacity:.6">${esc(a.username)}</div></td>
-        <td>${esc(a.display_name ? a.username : '')}</td>
-        <td>${STATUS_LABEL[a.status] || a.status}</td>
-        <td>${RISK_LABEL[a.risk_level] || '未测评'}</td>
-        <td class="num">${num(a.cash)}</td>
-        <td class="num">${num(a.market_value)}</td>
-        <td class="num">${num(a.total_asset)}</td>
-        <td class="num" style="${pnlStyle}">${num(pnl)}</td>
-        <td>${actions}</td>
-      </tr>`;
-    }).join('');
-  } catch (e) {
-    body.innerHTML = emptyRow(cols, e.message);
-  }
-}
-$('refreshRetail').addEventListener('click', () => loadAccounts('retail'));
-$('refreshInstitution').addEventListener('click', () => loadAccounts('institution'));
 
-/* 行内操作统一用事件委托：表格是整块重绘的，逐个绑定会被冲掉 */
-document.addEventListener('click', async (e) => {
-  const btn = e.target.closest('.row-btn');
-  if (!btn) return;
-  const ds = btn.dataset || {};
+      body.innerHTML = rows.map(function (u) {
+        var ops = rowBtn('调资金', 'data-act="adjust" data-id="' + u.id + '"') +
+          rowBtn(u.status === 'active' ? '冻结' : '启用',
+            'data-act="status" data-id="' + u.id + '" data-status="' + esc(u.status) + '"') +
+          rowBtn('删除', 'data-act="del" data-id="' + u.id + '" data-name="' + esc(u.username) + '"', true);
 
-  if (ds.fund) {
-    state.adjustAccount = ds.fund;
-    $('ajCash').value = '';
-    dlg('dlgAdjust').open();
-    return;
-  }
-  if (ds.pwd) {
-    const pw = window.prompt(`为 ${ds.name} 设置新口令（至少 8 位）`);
-    if (!pw) return;
-    try {
-      await api(`/api/admin/accounts/${ds.pwd}/password`, {
-        method: 'PUT', body: JSON.stringify({ password: pw }),
-      });
-      notify('口令已重置');
-    } catch (err) { notify(err.message); }
-    return;
-  }
-  if (ds.status) {
-    try {
-      await api(`/api/admin/accounts/${ds.status}/status`, {
-        method: 'PUT', body: JSON.stringify({ status: ds.next }),
-      });
-      notify(ds.next === 'frozen' ? '已冻结' : '已解冻');
-      loadAccounts(state.page);
-    } catch (err) { notify(err.message); }
-    return;
-  }
-  if (ds.deladm) {
-    if (!(await ask(`确认删除管理员 ${ds.name}？`, '删除管理员'))) return;
-    try {
-      await api(`/api/admin/admins/${ds.deladm}`, { method: 'DELETE' });
-      notify('已删除');
-      loadAdmins();
-    } catch (err) { notify(err.message); }
-    return;
-  }
-  if (ds.admstat) {
-    try {
-      await api(`/api/admin/admins/${ds.admstat}/status`, {
-        method: 'PUT', body: JSON.stringify({ is_active: ds.active !== 'true' }),
-      });
-      notify('状态已更新');
-      loadAdmins();
-    } catch (err) { notify(err.message); }
-    return;
-  }
-  if (ds.dels) {
-    if (!(await ask(`确认删除标的 ${ds.name}？`, '删除标的'))) return;
-    try {
-      await api(`/api/admin/stocks/${encodeURIComponent(ds.dels)}`, { method: 'DELETE' });
-      notify('已删除');
-      loadStocks();
-    } catch (err) { notify(err.message); }
-    return;
-  }
-  if (ds.edits) {
-    const s = (state.stocks || []).find((x) => x.code === ds.edits);
-    if (!s) return;
-    state.editStock = s;
-    $('stCode').value = s.code || '';
-    $('stName').value = s.name || '';
-    $('stBoard').value = s.board || '';
-    $('stIndustry').value = s.industry || '';
-    $('stPrevClose').value = s.prev_close ?? '';
-    $('stLimitUp').value = s.limit_up ?? '';
-    $('stLimitDown').value = s.limit_down ?? '';
-    dlg('dlgStock').open();
-  }
-});
-
-/* 新增账户 */
-$('addRetail').addEventListener('click', () => openAccountDialog('retail'));
-$('addInstitution').addEventListener('click', () => openAccountDialog('institution'));
-
-function openAccountDialog(role) {
-  $('acUsername').value = '';
-  $('acDisplay').value = '';
-  $('acCash').value = role === 'institution' ? '50000000' : '1000000';
-  $('acPassword').value = '';
-  $('acRole').value = role;
-  dlg('dlgAccount').open();
-}
-
-$('acCancel').addEventListener('click', () => { dlg('dlgAccount').close(); });
-
-$('acSubmit').addEventListener('click', async () => {
-  const payload = {
-    username: $('acUsername').value.trim(),
-    display_name: $('acDisplay').value.trim(),
-    initial_cash: Number($('acCash').value || 0),
-    role: $('acRole').value || 'retail',
-    password: $('acPassword').value,
-  };
-  if (!payload.username) { notify('请填写用户名'); return; }
-  if (payload.password.length < 8) { notify('口令至少 8 位'); return; }
-  try {
-    await api('/api/admin/accounts', { method: 'POST', body: JSON.stringify(payload) });
-    dlg('dlgAccount').close();
-    notify('账户已创建');
-    loadAccounts(payload.role === 'institution' ? 'institution' : 'retail');
-  } catch (e) { notify(e.message); }
-});
-
-/* 调整可用资金 */
-$('ajCancel').addEventListener('click', () => { dlg('dlgAdjust').close(); });
-
-$('ajSubmit').addEventListener('click', async () => {
-  const cash = Number($('ajCash').value);
-  if (!state.adjustAccount || isNaN(cash)) { notify('请填写金额'); return; }
-  try {
-    await api(`/api/admin/accounts/${state.adjustAccount}/funding`, {
-      method: 'PUT', body: JSON.stringify({ cash }),
+        if (isRetail) {
+          return '<tr>' +
+            '<td>' + esc(u.username) + '</td>' +
+            '<td>' + esc(u.display_name || '--') + '</td>' +
+            '<td>' + esc(STATUS_LABEL[u.status] || u.status) + '</td>' +
+            '<td>' + esc(riskLabel(u.risk_level, u.risk_assessed)) + '</td>' +
+            '<td class="num">' + num(u.cash) + '</td>' +
+            '<td class="num">' + num(u.frozen_cash) + '</td>' +
+            '<td class="num">' + num(u.market_value) + '</td>' +
+            '<td class="num">' + num(u.total_asset) + '</td>' +
+            '<td class="num">' + int(u.positions) + '</td>' +
+            '<td class="ops">' + ops + '</td>' +
+            '</tr>';
+        }
+        return '<tr>' +
+          '<td>' + esc(u.username) + '</td>' +
+          '<td>' + esc(u.display_name || '--') + '</td>' +
+          '<td>' + esc(STATUS_LABEL[u.status] || u.status) + '</td>' +
+          '<td class="num">' + num(u.cash) + '</td>' +
+          '<td class="num">' + num(u.credit_limit) + '</td>' +
+          '<td class="num">' + num(u.market_value) + '</td>' +
+          '<td class="num">' + num(u.total_asset) + '</td>' +
+          '<td class="num">' + num(u.realized_pnl) + '</td>' +
+          '<td class="ops">' + ops + '</td>' +
+          '</tr>';
+      }).join('');
+    }).catch(function (e) {
+      body.innerHTML = emptyRow(cols, e.message);
     });
-    dlg('dlgAdjust').close();
-    notify('资金已调整');
-    loadAccounts(state.page);
-  } catch (e) { notify(e.message); }
-});
-
-/* ------------------------------------------------------------------ *
- * 管理员
- * ------------------------------------------------------------------ */
-async function loadAdmins() {
-  const body = $('adminsBody');
-  body.innerHTML = emptyRow(5, '加载中…');
-  try {
-    const d = await api('/api/admin/admins');
-    if (!d.items.length) { body.innerHTML = emptyRow(5, '暂无管理员'); return; }
-    body.innerHTML = d.items.map((a) => `
-      <tr>
-        <td>${esc(a.username)}</td>
-        <td>${esc(a.display_name || '--')}</td>
-        <td>${a.is_active ? '启用' : '停用'}</td>
-        <td>${dt(a.created_at)}</td>
-        <td>
-          ${rowBtn(a.is_active ? '停用' : '启用', `data-admstat="${a.id}"`, `data-active="${a.is_active}"`)}
-          ${rowBtn('删除', `data-deladm="${a.id}"`, `data-name="${esc(a.username)}"`, true)}
-        </td>
-      </tr>`).join('');
-  } catch (e) {
-    body.innerHTML = emptyRow(5, e.message);
   }
-}
-$('refreshAdmins').addEventListener('click', loadAdmins);
 
-$('addAdmin').addEventListener('click', () => {
-  $('adUsername').value = '';
-  $('adDisplay').value = '';
-  $('adPassword').value = '';
-  dlg('dlgAdmin').open();
-});
-$('adCancel').addEventListener('click', () => { dlg('dlgAdmin').close(); });
+  function openAccountDialog(role) {
+    $('acUsername').value = '';
+    $('acDisplay').value = '';
+    $('acCash').value = role === 'institution' ? '50000000' : '1000000';
+    $('acPassword').value = '';
+    $('acRole').value = role;
+    $('acTitle').textContent = role === 'institution' ? '新建机构账户' : '新建零售账户';
+    openDlg('dlgAccount');
+  }
 
-$('adSubmit').addEventListener('click', async () => {
-  const payload = {
-    username: $('adUsername').value.trim(),
-    display_name: $('adDisplay').value.trim(),
-    password: $('adPassword').value,
-  };
-  if (!payload.username) { notify('请填写用户名'); return; }
-  if (payload.password.length < 8) { notify('口令至少 8 位'); return; }
-  try {
-    await api('/api/admin/admins', { method: 'POST', body: JSON.stringify(payload) });
-    dlg('dlgAdmin').close();
-    notify('管理员已创建');
-    loadAdmins();
-  } catch (e) { notify(e.message); }
-});
+  function submitAccount() {
+    var payload = {
+      username: $('acUsername').value.trim(),
+      display_name: $('acDisplay').value.trim(),
+      role: $('acRole').value,
+      cash: Number($('acCash').value || 0),
+      password: $('acPassword').value,
+    };
+    if (!payload.username) { notify('请填写登录名'); return; }
+    if (payload.password.length < 6) { notify('口令至少 6 位'); return; }
+    api('/api/admin/accounts', { method: 'POST', body: JSON.stringify(payload) })
+      .then(function () {
+        closeDlg('dlgAccount');
+        notify('账户已创建');
+        showPage(payload.role === 'institution' ? 'institution' : 'retail');
+      })
+      .catch(function (e) { notify(e.message); });
+  }
 
-/* ------------------------------------------------------------------ *
- * 标的与指数
- * ------------------------------------------------------------------ */
-async function loadStocks() {
-  const body = $('stocksBody');
-  body.innerHTML = emptyRow(9, '加载中…');
-  try {
-    const d = await api('/api/admin/stocks');
-    const rows = d.items || [];
-    state.stocks = rows;
-    if (!rows.length) {
-      body.innerHTML = emptyRow(9, '库中暂无标的，去「数据初始化」注入默认标的');
+  function openAdjustDialog(id, username) {
+    state.adjustTarget = id;
+    $('ajWho').textContent = '账户：' + username;
+    $('ajAmount').value = '';
+    $('ajRemark').value = '';
+    openDlg('dlgAdjust');
+  }
+
+  function submitAdjust() {
+    var amount = Number($('ajAmount').value);
+    if (!state.adjustTarget || !isFinite(amount) || amount === 0) {
+      notify('请填写非零金额');
       return;
     }
-    body.innerHTML = rows.map((s) => `
-      <tr>
-        <td>${esc(s.code)}</td>
-        <td>${esc(s.name)}</td>
-        <td>${esc(s.board || '--')}</td>
-        <td>${esc(s.industry || '--')}</td>
-        <td class="num">${s.price != null ? num(s.price) : num(s.prev_close)}</td>
-        <td class="num">${num(s.limit_up)}</td>
-        <td class="num">${num(s.limit_down)}</td>
-        <td class="num">${num(s.amount)}</td>
-        <td>
-          ${rowBtn('编辑', `data-edits="${esc(s.code)}"`)}
-          ${rowBtn('删除', `data-dels="${esc(s.code)}"`, `data-name="${esc(s.name)}"`, true)}
-        </td>
-      </tr>`).join('');
-  } catch (e) {
-    body.innerHTML = emptyRow(9, e.message);
+    api('/api/admin/accounts/' + state.adjustTarget + '/adjust', {
+      method: 'POST',
+      body: JSON.stringify({ amount: amount, remark: $('ajRemark').value.trim() }),
+    }).then(function (d) {
+      closeDlg('dlgAdjust');
+      notify('资金已调整，可用资金 ' + num(d.cash));
+      loadAccounts(state.page === 'institution' ? 'institution' : 'retail');
+    }).catch(function (e) { notify(e.message); });
   }
-}
 
-async function loadIndices() {
-  const body = $('indicesBody');
-  body.innerHTML = emptyRow(4, '加载中…');
-  try {
-    const d = await api('/api/admin/indices');
-    const rows = d.items || [];
-    if (!rows.length) { body.innerHTML = emptyRow(4, '暂无指数'); return; }
-    body.innerHTML = rows.map((i) => `
-      <tr>
-        <td>${esc(i.code)}</td>
-        <td>${esc(i.name)}</td>
-        <td class="num">${num(i.prev_close)}</td>
-        <td class="num">${pct(i.change_pct)}</td>
-      </tr>`).join('');
-  } catch (e) {
-    body.innerHTML = emptyRow(4, e.message);
+  function toggleAccountStatus(id, status) {
+    var next = status === 'active' ? 'frozen' : 'active';
+    var whose = state.accounts[state.page === 'institution' ? 'institution' : 'retail'] || [];
+    var row = whose.filter(function (u) { return String(u.id) === String(id); })[0] || {};
+    ask((next === 'frozen' ? '冻结' : '启用') + '账户「' + (row.username || id) + '」？', '修改状态')
+      .then(function (ok) {
+        if (!ok) return;
+        return api('/api/admin/accounts/' + id + '/status', {
+          method: 'POST',
+          body: JSON.stringify({ status: next }),
+        }).then(function () {
+          notify('状态已更新');
+          loadAccounts(state.page === 'institution' ? 'institution' : 'retail');
+        });
+      })
+      .catch(function (e) { notify(e.message); });
   }
-}
-$('refreshStocks').addEventListener('click', () => { loadStocks(); loadIndices(); });
 
-$('addStock').addEventListener('click', () => {
-  state.editStock = null;
-  ['stCode', 'stName', 'stBoard', 'stIndustry', 'stPrevClose', 'stLimitUp', 'stLimitDown']
-    .forEach((id) => { $(id).value = ''; });
-  dlg('dlgStock').open();
-});
+  function deleteAccount(id, name) {
+    ask('删除账户「' + name + '」？该操作不可撤销。', '删除账户').then(function (ok) {
+      if (!ok) return;
+      return api('/api/admin/accounts/' + id, { method: 'DELETE' }).then(function () {
+        notify('账户已删除');
+        loadAccounts(state.page === 'institution' ? 'institution' : 'retail');
+      });
+    }).catch(function (e) { notify(e.message); });
+  }
 
-$('stSubmit').addEventListener('click', async () => {
-  const code = $('stCode').value.trim();
-  if (!code) { notify('请填写代码'); return; }
-  const payload = {
-    code,
-    name: $('stName').value.trim(),
-    board: $('stBoard').value.trim(),
-    industry: $('stIndustry').value.trim(),
-    prev_close: Number($('stPrevClose').value || 0),
-    limit_up: Number($('stLimitUp').value || 0),
-    limit_down: Number($('stLimitDown').value || 0),
-  };
-  try {
-    // 编辑走 PUT，新增走 POST；两者都提交同一份字段
-    await api(state.editStock ? `/api/admin/stocks/${encodeURIComponent(code)}` : '/api/admin/stocks', {
-      method: state.editStock ? 'PUT' : 'POST',
+  /* ---------------------------------------------------------------- 管理员 */
+  function loadAdmins() {
+    var body = $('adminsBody');
+    body.innerHTML = emptyRow(6, '加载中…');
+    return api('/api/admin/admins').then(function (d) {
+      var rows = d.items || [];
+      if (!rows.length) {
+        body.innerHTML = emptyRow(6, '暂无管理员');
+        return;
+      }
+      body.innerHTML = rows.map(function (a) {
+        return '<tr>' +
+          '<td>' + esc(a.username) + '</td>' +
+          '<td>' + esc(a.display_name || '--') + '</td>' +
+          '<td>' + (a.is_active ? '启用' : '停用') + '</td>' +
+          '<td>' + ts(a.last_login_at) + '</td>' +
+          '<td>' + ts(a.created_at) + '</td>' +
+          '<td class="ops">' +
+          rowBtn(a.is_active ? '停用' : '启用',
+            'data-act="admstat" data-id="' + a.id + '" data-active="' + (a.is_active ? '1' : '0') + '"') +
+          rowBtn('删除', 'data-act="admdel" data-id="' + a.id + '" data-name="' + esc(a.username) + '"', true) +
+          '</td></tr>';
+      }).join('');
+    }).catch(function (e) {
+      body.innerHTML = emptyRow(6, e.message);
+    });
+  }
+
+  function submitAdmin() {
+    var payload = {
+      username: $('adUsername').value.trim(),
+      display_name: $('adDisplay').value.trim(),
+      password: $('adPassword').value,
+    };
+    if (!payload.username) { notify('请填写登录名'); return; }
+    if (payload.password.length < 8) { notify('口令至少 8 位'); return; }
+    api('/api/admin/admins', { method: 'POST', body: JSON.stringify(payload) })
+      .then(function () {
+        closeDlg('dlgAdmin');
+        notify('管理员已创建');
+        loadAdmins();
+      })
+      .catch(function (e) { notify(e.message); });
+  }
+
+  /* ------------------------------------------------------------ 标的与指数 */
+  function loadStocks() {
+    var body = $('stocksBody');
+    body.innerHTML = emptyRow(10, '加载中…');
+    return api('/api/admin/stocks').then(function (d) {
+      var rows = d.items || [];
+      state.stocks = rows;
+      $('stockCount').textContent = '共 ' + rows.length + ' 只标的';
+      if (!rows.length) {
+        body.innerHTML = emptyRow(10, '库中暂无标的，去「数据初始化」注入默认标的');
+        return;
+      }
+      body.innerHTML = rows.map(function (s) {
+        var price = pick(s, ['price', 'last'], null);
+        var chg = pick(s, ['change_pct', 'pct'], null);
+        var cls = Number(chg) > 0 ? 'is-pos' : (Number(chg) < 0 ? 'is-neg' : '');
+        return '<tr>' +
+          '<td>' + esc(s.code) + '</td>' +
+          '<td>' + esc(s.name) + '</td>' +
+          '<td>' + esc(s.board || '--') + '</td>' +
+          '<td>' + esc(s.industry || '--') + '</td>' +
+          '<td class="num">' + num(price === null ? s.prev_close : price) + '</td>' +
+          '<td class="num ' + cls + '">' + pct(chg) + '</td>' +
+          '<td class="num">' + num(s.prev_close) + '</td>' +
+          '<td class="num">' + num(s.limit_up) + '</td>' +
+          '<td class="num">' + num(s.limit_down) + '</td>' +
+          '<td class="ops">' +
+          rowBtn('编辑', 'data-act="editstock" data-code="' + esc(s.code) + '"') +
+          rowBtn('删除', 'data-act="delstock" data-code="' + esc(s.code) + '" data-name="' + esc(s.name) + '"', true) +
+          '</td></tr>';
+      }).join('');
+    }).catch(function (e) {
+      body.innerHTML = emptyRow(10, e.message);
+    });
+  }
+
+  function loadIndices() {
+    var body = $('indicesBody');
+    body.innerHTML = emptyRow(4, '加载中…');
+    return api('/api/admin/indices').then(function (d) {
+      var rows = d.items || [];
+      if (!rows.length) {
+        body.innerHTML = emptyRow(4, '暂无指数');
+        return;
+      }
+      body.innerHTML = rows.map(function (i) {
+        var point = pick(i, ['point', 'close', 'value', 'price'], null);
+        var chg = pick(i, ['change_pct', 'pct'], null);
+        var cls = Number(chg) > 0 ? 'is-pos' : (Number(chg) < 0 ? 'is-neg' : '');
+        return '<tr>' +
+          '<td>' + esc(i.code) + '</td>' +
+          '<td>' + esc(i.name) + '</td>' +
+          '<td class="num">' + num(point) + '</td>' +
+          '<td class="num ' + cls + '">' + pct(chg) + '</td>' +
+          '</tr>';
+      }).join('');
+    }).catch(function (e) {
+      body.innerHTML = emptyRow(4, e.message);
+    });
+  }
+
+  function openStockDialog(code) {
+    state.editingStock = code || null;
+    if (code) {
+      var s = state.stocks.filter(function (x) { return x.code === code; })[0] || {};
+      $('stTitle').textContent = '编辑标的 ' + code;
+      $('stCode').value = s.code || code;
+      $('stCode').readOnly = true;
+      $('stName').value = s.name || '';
+      $('stBoard').value = s.board || '主板';
+      $('stIndustry').value = s.industry || '';
+      $('stPrice').value = s.prev_close || '';
+      $('stFloat').value = s.float_shares || 500000000;
+    } else {
+      $('stTitle').textContent = '新增标的';
+      $('stCode').value = '';
+      $('stCode').readOnly = false;
+      $('stName').value = '';
+      $('stBoard').value = '主板';
+      $('stIndustry').value = '';
+      $('stPrice').value = '10';
+      $('stFloat').value = '500000000';
+    }
+    openDlg('dlgStock');
+  }
+
+  function submitStock() {
+    var code = $('stCode').value.trim();
+    if (!code) { notify('请填写代码'); return; }
+    var payload = {
+      code: code,
+      name: $('stName').value.trim(),
+      board: $('stBoard').value,
+      industry: $('stIndustry').value.trim(),
+      init_price: Number($('stPrice').value || 0),
+      float_shares: Number($('stFloat').value || 0),
+    };
+    if (!(payload.init_price > 0)) { notify('基准价必须大于 0'); return; }
+    var editing = !!state.editingStock;
+    api(editing ? '/api/admin/stocks/' + encodeURIComponent(code) : '/api/admin/stocks', {
+      method: editing ? 'PUT' : 'POST',
       body: JSON.stringify(payload),
+    }).then(function () {
+      closeDlg('dlgStock');
+      notify('已保存');
+      loadStocks();
+    }).catch(function (e) { notify(e.message); });
+  }
+
+  function deleteStock(code, name) {
+    ask('删除标的「' + name + '（' + code + '）」？', '删除标的').then(function (ok) {
+      if (!ok) return;
+      return api('/api/admin/stocks/' + encodeURIComponent(code), { method: 'DELETE' })
+        .then(function () {
+          notify('标的已删除');
+          loadStocks();
+        });
+    }).catch(function (e) { notify(e.message); });
+  }
+
+  /* -------------------------------------------------------------- 模拟引擎 */
+  function loadEngine() {
+    $('engineKpis').innerHTML = '<div class="app-loading">加载中…</div>';
+    return api('/api/admin/engine').then(function (d) {
+      var s = d.session || {};
+      $('toggleEngine').textContent = d.enabled ? '关闭引擎' : '开启引擎';
+      $('toggleEngine').dataset.enabled = d.enabled ? '1' : '0';
+      $('engineKpis').innerHTML = [
+        kpi('引擎开关', d.enabled ? '已开启' : '已关闭'),
+        kpi('价格推进', d.advancing ? '推进中' : '未推进'),
+        kpi('就绪', d.ready ? '是' : '否'),
+        kpi('交易模式', s.mode_label || d.trade_mode || '--'),
+        kpi('当前时段', s.label || '--'),
+        kpi('可撮合', s.is_open ? '是' : '否'),
+        kpi('可申报', s.can_trade ? '是' : '否'),
+        kpi('推进间隔', (d.tick_seconds === undefined ? '--' : d.tick_seconds) + ' 秒'),
+        kpi('推进次数', int(d.tick_count)),
+        kpi('标的数量', int(d.listed)),
+      ].join('');
+    }).catch(function (e) {
+      $('engineKpis').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
     });
-    dlg('dlgStock').close();
-    notify('已保存');
-    loadStocks();
-  } catch (e) { notify(e.message); }
-});
-
-/* ------------------------------------------------------------------ *
- * 模拟引擎
- * ------------------------------------------------------------------ */
-async function loadEngine() {
-  $('engineKpis').innerHTML = emptyRow(1, '加载中…');
-  try {
-    const d = await api('/api/admin/engine');
-    state.engine = d;
-    const s = d.session || {};
-    $('toggleEngine').textContent = d.enabled ? '关闭引擎' : '开启引擎';
-
-    const items = [
-      ['引擎开关', d.enabled ? '已开启' : '已关闭'],
-      ['价格推进', d.advancing ? '推进中' : '未推进'],
-      ['交易模式', s.mode_label || s.mode || '--'],
-      ['当前时段', s.label || '--'],
-      ['可撮合', s.is_open ? '是' : '否'],
-      ['可申报', s.can_trade ? '是' : '否'],
-      ['推进间隔', `${d.tick_seconds ?? '--'} 秒`],
-      ['推进次数', d.tick_count ?? '--'],
-      ['标的数量', d.listed ?? '--'],
-    ];
-    $('engineKpis').innerHTML = items.map(([a, v]) => kpiCard(a, v)).join('');
-  } catch (e) {
-    $('engineKpis').innerHTML = `<div style="opacity:.6">${esc(e.message)}</div>`;
   }
-}
-$('refreshEngine').addEventListener('click', loadEngine);
 
-$('toggleEngine').addEventListener('click', async () => {
-  try {
-    await api('/api/admin/engine/toggle', { method: 'POST' });
-    notify('引擎状态已切换');
-    loadEngine();
-  } catch (e) { notify(e.message); }
-});
-
-$('resetEngine').addEventListener('click', async () => {
-  if (!(await ask('确认把全部行情重置到昨收？', '重置行情'))) return;
-  try {
-    await api('/api/admin/engine/reset', { method: 'POST' });
-    notify('行情已重置');
-    loadEngine();
-  } catch (e) { notify(e.message); }
-});
-
-/* ------------------------------------------------------------------ *
- * 风险偏好
- * ------------------------------------------------------------------ */
-function renderRiskDist(target, d) {
-  const items = [
-    ['账户总数', d.total], ['未测评', d.unassessed], ['保守型', d.conservative],
-    ['稳健型', d.balanced], ['进取型', d.aggressive],
-  ];
-  $(target).innerHTML = items.map(([a, v]) => kpiCard(a, v ?? 0)).join('');
-}
-
-async function loadRisk() {
-  try {
-    const d = await api('/api/admin/risk-summary');
-    renderRiskDist('riskDist', d);
-  } catch (e) {
-    $('riskDist').innerHTML = `<div style="opacity:.6">${esc(e.message)}</div>`;
+  function toggleEngine() {
+    var enabled = $('toggleEngine').dataset.enabled === '1';
+    api('/api/admin/engine/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: !enabled }),
+    }).then(function () {
+      notify(enabled ? '引擎已关闭' : '引擎已开启');
+      loadEngine();
+    }).catch(function (e) { notify(e.message); });
   }
-  await loadLeaderboard();
-}
 
-async function loadLeaderboard() {
-  const body = $('leaderboardBody');
-  body.innerHTML = emptyRow(6, '加载中…');
-  try {
-    const d = await api('/api/admin/leaderboard');
-    const rows = d.items || [];
-    if (!rows.length) { body.innerHTML = emptyRow(6, '暂无数据'); return; }
-    body.innerHTML = rows.map((u) => `
-      <tr>
-        <td>${esc(u.username)}</td>
-        <td>${esc(u.display_name || '--')}</td>
-        <td>${ROLE_LABEL[u.role] || u.role || '--'}</td>
-        <td class="num">${num(u.total_asset)}</td>
-        <td class="num">${num(u.realized_pnl)}</td>
-        <td class="num">${pct(u.return_pct)}</td>
-      </tr>`).join('');
-  } catch (e) {
-    body.innerHTML = emptyRow(6, e.message);
+  function resetEngine() {
+    ask('确认把全部行情重置到昨收？分钟线与累计成交会清空。', '重置行情').then(function (ok) {
+      if (!ok) return;
+      return api('/api/admin/engine/reset', { method: 'POST' }).then(function () {
+        notify('行情已重置');
+        loadEngine();
+      });
+    }).catch(function (e) { notify(e.message); });
   }
-}
-$('refreshRisk').addEventListener('click', () => { loadRisk(); });
 
-/* ------------------------------------------------------------------ *
- * 系统配置
- * ------------------------------------------------------------------ */
-async function loadConfig() {
-  const grid = $('cfgGrid');
-  grid.innerHTML = '<div style="opacity:.6">加载中…</div>';
-  try {
-    const d = await api('/api/admin/settings');
-    state.cfg = d.items || [];
-    state.cfgDirty = {};
-    if (!state.cfg.length) { grid.innerHTML = '<div style="opacity:.6">暂无可配置项</div>'; return; }
-    grid.innerHTML = state.cfg.map((c) => {
-      let control = '';
-      if (c.kind === 'bool') {
-        control = `<select class="app-select" data-cfg="${c.key}">
-          <option value="true"${c.value ? ' selected' : ''}>开启</option>
-          <option value="false"${c.value ? '' : ' selected'}>关闭</option>
-        </select>`;
-      } else if (c.kind === 'choice') {
-        const opts = (c.choice_labels && c.choice_labels.length)
-          ? c.choice_labels
-          : (c.choices || []).map((o) => ({ value: o, label: o }));
-        control = `<select class="app-select" data-cfg="${c.key}">
-          ${opts.map((o) => `<option value="${esc(String(o.value))}"${String(o.value) === String(c.value) ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
-        </select>`;
-      } else {
-        control = `<input class="app-select" data-cfg="${c.key}" type="number"
-          step="${c.kind === 'int' ? 1 : 'any'}" value="${esc(String(c.value))}" />`;
+  /* -------------------------------------------------------------- 风险偏好 */
+  function loadRisk() {
+    return api('/api/admin/risk-summary').then(function (d) {
+      $('riskDist').innerHTML = [
+        kpi('账户总数', int(d.total)),
+        kpi('未测评', int(d.unassessed)),
+        kpi('保守型', int(d.conservative)),
+        kpi('稳健型', int(d.balanced)),
+        kpi('进取型', int(d.aggressive)),
+      ].join('');
+    }).catch(function (e) {
+      $('riskDist').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
+    }).then(loadLeaderboard);
+  }
+
+  function loadLeaderboard() {
+    var body = $('leaderboardBody');
+    body.innerHTML = emptyRow(6, '加载中…');
+    return api('/api/admin/leaderboard').then(function (d) {
+      var rows = d.items || [];
+      if (!rows.length) {
+        body.innerHTML = emptyRow(6, '暂无数据');
+        return;
       }
-      const range = (c.kind === 'float' || c.kind === 'int')
-        ? `${c.min} ~ ${c.max}${c.unit ? ' ' + c.unit : ''}` : '';
-      return `<div class="mdui-card cfg-item">
-        <div class="cfg-label">${esc(c.label)}</div>
-        <div class="cfg-key">${esc(c.key)}</div>
-        ${control}
-        <div class="cfg-note">
-          ${esc(c.note || '')}${range ? ' · 范围 ' + esc(range) : ''} · 默认 ${esc(c.default)}
-        </div>
-      </div>`;
-    }).join('');
-
-    grid.querySelectorAll('[data-cfg]').forEach((el) => {
-      const mark = () => {
-        state.cfgDirty[el.dataset.cfg] = el.value;
-        el.classList.add('cfg-dirty');
-      };
-      el.addEventListener('input', mark);
-      el.addEventListener('change', mark);
+      body.innerHTML = rows.map(function (u) {
+        var cls = Number(u.realized_pnl) > 0 ? 'is-pos' : (Number(u.realized_pnl) < 0 ? 'is-neg' : '');
+        return '<tr>' +
+          '<td>' + esc(u.username) + '</td>' +
+          '<td>' + esc(u.display_name || '--') + '</td>' +
+          '<td>' + esc(ROLE_LABEL[u.role] || u.role || '--') + '</td>' +
+          '<td class="num">' + num(u.total_asset) + '</td>' +
+          '<td class="num ' + cls + '">' + num(u.realized_pnl) + '</td>' +
+          '<td class="num ' + cls + '">' + pct(u.return_pct) + '</td>' +
+          '</tr>';
+      }).join('');
+    }).catch(function (e) {
+      body.innerHTML = emptyRow(6, e.message);
     });
-  } catch (e) {
-    grid.innerHTML = `<div style="opacity:.6">${esc(e.message)}</div>`;
   }
-}
-$('refreshCfg').addEventListener('click', loadConfig);
 
-$('saveCfg').addEventListener('click', async () => {
-  const vals = state.cfgDirty;
-  if (!Object.keys(vals).length) { notify('没有需要保存的修改'); return; }
-  try {
-    const d = await api('/api/admin/settings', {
-      method: 'PUT', body: JSON.stringify({ values: vals }),
+  /* -------------------------------------------------------------- 系统配置 */
+  function cfgControl(c) {
+    var key = 'data-cfg="' + esc(c.key) + '"';
+    if (c.kind === 'bool') {
+      return '<select class="app-select" ' + key + '>' +
+        '<option value="true"' + (c.value ? ' selected' : '') + '>开启</option>' +
+        '<option value="false"' + (c.value ? '' : ' selected') + '>关闭</option>' +
+        '</select>';
+    }
+    if (c.kind === 'choice') {
+      var opts = (c.choices || []).map(function (o) {
+        if (o && typeof o === 'object') return { value: o.value, label: o.label };
+        return { value: o, label: o };
+      });
+      if (c.choice_labels && c.choice_labels.length) {
+        opts = c.choice_labels.map(function (o, i) {
+          if (o && typeof o === 'object') return { value: o.value, label: o.label };
+          return { value: (c.choices || [])[i], label: o };
+        });
+      }
+      return '<select class="app-select" ' + key + '>' + opts.map(function (o) {
+        return '<option value="' + esc(String(o.value)) + '"' +
+          (String(o.value) === String(c.value) ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+      }).join('') + '</select>';
+    }
+    return '<input class="app-select" ' + key + ' type="number" step="' +
+      (c.kind === 'int' ? '1' : 'any') + '" value="' + esc(String(c.value)) + '" />';
+  }
+
+  function loadConfig() {
+    var grid = $('cfgGrid');
+    grid.innerHTML = '<div class="app-loading">加载中…</div>';
+    return api('/api/admin/settings').then(function (d) {
+      state.cfg = d.items || [];
+      state.cfgDirty = {};
+      if (!state.cfg.length) {
+        grid.innerHTML = '<div class="app-loading">暂无可配置项</div>';
+        return;
+      }
+      grid.innerHTML = state.cfg.map(function (c) {
+        var range = (c.kind === 'float' || c.kind === 'int')
+          ? (c.min + ' ~ ' + c.max + (c.unit ? ' ' + c.unit : '')) : '';
+        return '<div class="app-cfg" data-cfgbox="' + esc(c.key) + '">' +
+          '<div class="app-cfg-label">' + esc(c.label) + '</div>' +
+          '<div class="app-cfg-key">' + esc(c.key) + '</div>' +
+          cfgControl(c) +
+          '<div class="app-cfg-note">' + esc(c.note || '') +
+          (range ? ' · 范围 ' + esc(range) : '') +
+          ' · 默认 ' + esc(c.default) + '</div>' +
+          '</div>';
+      }).join('');
+
+      grid.querySelectorAll('[data-cfg]').forEach(function (el) {
+        var mark = function () {
+          state.cfgDirty[el.dataset.cfg] = el.value;
+          var box = el.closest('.app-cfg');
+          if (box) box.classList.add('app-cfg-dirty');
+        };
+        el.addEventListener('input', mark);
+        el.addEventListener('change', mark);
+      });
+    }).catch(function (e) {
+      grid.innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
     });
-    const okN = (d.updated || []).length;
-    const badN = (d.rejected || []).length;
-    notify(badN
-      ? `已保存 ${okN} 项；${badN} 项被拒绝：` + d.rejected.map((r) => r.reason).join('；')
-      : `已保存 ${okN} 项配置，已立即生效`);
-    loadConfig();
-  } catch (err) { notify(err.message); }
-});
+  }
 
-$('resetCfg').addEventListener('click', async () => {
-  if (!(await ask('确认把全部运行期配置恢复为代码默认值？', '恢复默认'))) return;
-  try {
-    await api('/api/admin/settings/reset', { method: 'POST' });
-    notify('已恢复默认配置');
-    loadConfig();
-  } catch (err) { notify(err.message); }
-});
+  function saveConfig() {
+    var keys = Object.keys(state.cfgDirty);
+    if (!keys.length) { notify('没有需要保存的修改'); return; }
+    var values = {};
+    keys.forEach(function (key) {
+      var item = state.cfg.filter(function (c) { return c.key === key; })[0] || {};
+      var raw = state.cfgDirty[key];
+      if (item.kind === 'bool') values[key] = raw === 'true' || raw === true;
+      else if (item.kind === 'int') values[key] = parseInt(raw, 10);
+      else if (item.kind === 'float') values[key] = Number(raw);
+      else values[key] = raw;
+    });
+    api('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ values: values }) })
+      .then(function (d) {
+        var okN = (d.updated || []).length;
+        var bad = d.rejected || [];
+        notify(bad.length
+          ? '已保存 ' + okN + ' 项；' + bad.length + ' 项被拒绝：' +
+            bad.map(function (r) { return r.reason || r.key; }).join('；')
+          : '已保存 ' + okN + ' 项配置，已立即生效');
+        loadConfig();
+      })
+      .catch(function (e) { notify(e.message); });
+  }
 
-/* ------------------------------------------------------------------ *
- * 数据初始化
- * ------------------------------------------------------------------ */
-async function loadSeedStatus() {
-  try {
-    const d = await api('/api/admin/seed/status');
-    const items = [
-      ['标的数', d.stocks], ['交易账户', d.users], ['管理员', d.admins],
-      ['日线条数', int(d.daily_bars)], ['是否已初始化', d.seeded ? '是' : '否'],
-    ];
-    $('seedStatus').innerHTML = items.map(([a, v]) => kpiCard(a, v ?? 0)).join('');
-  } catch (e) { notify(e.message); }
-}
-$('refreshSeed').addEventListener('click', loadSeedStatus);
+  function resetConfig() {
+    ask('确认把全部运行期配置恢复为代码默认值？', '恢复默认').then(function (ok) {
+      if (!ok) return;
+      return api('/api/admin/settings/reset', { method: 'POST' }).then(function () {
+        notify('已恢复默认配置');
+        loadConfig();
+      });
+    }).catch(function (e) { notify(e.message); });
+  }
 
-$('seedBtn').addEventListener('click', async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true;
-  try {
-    const d = await api('/api/admin/seed', {
+  /* ------------------------------------------------------------ 数据初始化 */
+  function loadSeedStatus() {
+    return api('/api/admin/seed/status').then(function (d) {
+      $('seedStatus').innerHTML = [
+        kpi('标的数', int(d.stocks)),
+        kpi('交易账户', int(d.users)),
+        kpi('管理员', int(d.admins)),
+        kpi('日线条数', int(d.daily_bars)),
+        kpi('是否已初始化', d.seeded ? '是' : '否'),
+      ].join('');
+    }).catch(function (e) {
+      $('seedStatus').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
+    });
+  }
+
+  function runSeed() {
+    var btn = $('seedBtn');
+    btn.disabled = true;
+    api('/api/admin/seed', {
       method: 'POST',
       body: JSON.stringify({
         stocks: $('seedStocks').checked,
         users: $('seedUsers').checked,
         history: $('seedHistory').checked,
       }),
+    }).then(function (d) {
+      notify('注入完成：标的 +' + (d.stocks_added || 0) +
+        '、账户 +' + (d.users_added || 0) +
+        '、日线 +' + (d.daily_bars_added || 0));
+      loadSeedStatus();
+    }).catch(function (e) {
+      notify(e.message);
+    }).then(function () {
+      btn.disabled = false;
     });
-    notify(`注入完成：标的 +${d.stocks_added}、账户 +${d.users_added}、日线 +${d.daily_bars_added}`);
-    loadSeedStatus();
-  } catch (err) { notify(err.message); }
-  finally { btn.disabled = false; }
-});
-
-/* ------------------------------------------------------------------ *
- * 撮合质量
- * ------------------------------------------------------------------ */
-async function loadOps() {
-  try {
-    const m = await api('/api/admin/matching');
-    const kpi = [
-      ['委托总数', m.order_count], ['成交笔数', m.trade_count],
-      ['撮成率', (m.fill_rate_pct ?? 0) + '%'], ['撤单率', (m.cancel_rate_pct ?? 0) + '%'],
-      ['平均单笔成交额', num(m.avg_trade_amount)],
-    ];
-    $('matchKpi').innerHTML = kpi.map(([a, v]) => kpiCard(a, v ?? 0)).join('');
-
-    const rows = m.top_symbols || [];
-    $('matchBody').innerHTML = rows.length ? rows.map((o) => `
-      <tr>
-        <td>${esc(o.code)}</td>
-        <td>${esc(o.name || '')}</td>
-        <td class="num">${o.trades}</td>
-        <td class="num">${num(o.amount)}</td>
-        <td class="num">${int(o.volume)}</td>
-      </tr>`).join('') : emptyRow(5, '暂无成交');
-  } catch (e) {
-    $('matchBody').innerHTML = emptyRow(5, e.message);
   }
-}
-$('refreshOps').addEventListener('click', loadOps);
 
-$('settleBtn').addEventListener('click', async () => {
-  if (!(await ask('确认执行日终结转？将解锁全部 T+1 持仓。', '日终结转'))) return;
-  try {
-    await api('/api/admin/settle', { method: 'POST' });
-    notify('结转完成');
-    loadOps();
-  } catch (e) { notify(e.message); }
-});
+  /* -------------------------------------------------------------- 撮合质量 */
+  function loadOps() {
+    $('matchKpi').innerHTML = '<div class="app-loading">加载中…</div>';
+    return api('/api/admin/matching').then(function (m) {
+      $('matchKpi').innerHTML = [
+        kpi('委托总数', int(m.order_count)),
+        kpi('成交笔数', int(m.trade_count)),
+        kpi('撮成率', (m.fill_rate_pct === undefined ? '--' : m.fill_rate_pct + '%')),
+        kpi('撤单率', (m.cancel_rate_pct === undefined ? '--' : m.cancel_rate_pct + '%')),
+        kpi('平均单笔成交额', money(m.avg_trade_amount)),
+      ].join('');
 
-/* ------------------------------------------------------------------ *
- * 启动
- * ------------------------------------------------------------------ */
-if (token()) {
-  enterApp(null);
-  // 令牌可能已过期：静默校验一次，失效会自动回到登录页
-  api('/api/admin/me').catch(() => {});
-} else {
-  $('login').hidden = false;
-}
+      var rows = m.top_symbols || [];
+      $('matchBody').innerHTML = rows.length ? rows.map(function (o) {
+        return '<tr>' +
+          '<td>' + esc(o.code) + '</td>' +
+          '<td>' + esc(o.name || '--') + '</td>' +
+          '<td class="num">' + int(o.trades) + '</td>' +
+          '<td class="num">' + num(o.amount) + '</td>' +
+          '<td class="num">' + int(o.volume) + '</td>' +
+          '</tr>';
+      }).join('') : emptyRow(5, '暂无成交');
+    }).catch(function (e) {
+      $('matchKpi').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
+      $('matchBody').innerHTML = emptyRow(5, e.message);
+    });
+  }
+
+  function settle() {
+    ask('确认执行日终结转？将解锁全部 T+1 持仓。', '日终结转').then(function (ok) {
+      if (!ok) return;
+      return api('/api/admin/settle', { method: 'POST' }).then(function () {
+        notify('结转完成');
+        loadOps();
+      });
+    }).catch(function (e) { notify(e.message); });
+  }
+
+  /* ------------------------------------------------------------------ 绑定 */
+  function bind() {
+    $('navToggle').addEventListener('click', toggleDrawer);
+
+    document.querySelectorAll('.nav-item').forEach(function (el) {
+      el.addEventListener('click', function () { showPage(el.dataset.page); });
+    });
+
+    $('logoutBtn').addEventListener('click', doLogout);
+    $('loginBtn').addEventListener('click', doLogin);
+    $('loginPass').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') doLogin();
+    });
+    $('loginUser').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') $('loginPass').focus();
+    });
+
+    /* 总览 */
+    $('refreshOverview').addEventListener('click', loadOverview);
+
+    /* 交易账户 */
+    $('refreshRetail').addEventListener('click', function () { loadAccounts('retail'); });
+    $('addRetail').addEventListener('click', function () { openAccountDialog('retail'); });
+    $('refreshInst').addEventListener('click', function () { loadAccounts('institution'); });
+    $('addInst').addEventListener('click', function () { openAccountDialog('institution'); });
+    $('retailSearch').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') loadAccounts('retail');
+    });
+    $('instSearch').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') loadAccounts('institution');
+    });
+
+    $('acCancel').addEventListener('click', function () { closeDlg('dlgAccount'); });
+    $('acSubmit').addEventListener('click', submitAccount);
+    $('ajCancel').addEventListener('click', function () { closeDlg('dlgAdjust'); });
+    $('ajSubmit').addEventListener('click', submitAdjust);
+
+    /* 管理员 */
+    $('refreshAdmins').addEventListener('click', loadAdmins);
+    $('addAdmin').addEventListener('click', function () {
+      $('adUsername').value = '';
+      $('adDisplay').value = '';
+      $('adPassword').value = '';
+      openDlg('dlgAdmin');
+    });
+    $('adCancel').addEventListener('click', function () { closeDlg('dlgAdmin'); });
+    $('adSubmit').addEventListener('click', submitAdmin);
+
+    /* 标的 */
+    $('refreshStocks').addEventListener('click', function () {
+      loadStocks();
+      loadIndices();
+    });
+    $('addStock').addEventListener('click', function () { openStockDialog(null); });
+    $('stCancel').addEventListener('click', function () { closeDlg('dlgStock'); });
+    $('stSubmit').addEventListener('click', submitStock);
+
+    /* 引擎 */
+    $('refreshEngine').addEventListener('click', loadEngine);
+    $('toggleEngine').addEventListener('click', toggleEngine);
+    $('resetEngine').addEventListener('click', resetEngine);
+
+    /* 风险 */
+    $('refreshRisk').addEventListener('click', loadRisk);
+
+    /* 配置 */
+    $('refreshCfg').addEventListener('click', loadConfig);
+    $('saveCfg').addEventListener('click', saveConfig);
+    $('resetCfg').addEventListener('click', resetConfig);
+
+    /* 数据 */
+    $('refreshSeed').addEventListener('click', loadSeedStatus);
+    $('seedBtn').addEventListener('click', runSeed);
+
+    /* 撮合 */
+    $('refreshOps').addEventListener('click', loadOps);
+    $('settleBtn').addEventListener('click', settle);
+
+    /* 表格内的行内按钮统一在这里委托，只认 .row-btn，
+       避免误吃顶栏或对话框里的 mdui 按钮 */
+    document.addEventListener('click', function (e) {
+      var btn = e.target.closest ? e.target.closest('.row-btn') : null;
+      if (!btn) return;
+      var act = btn.dataset.act;
+      if (act === 'adjust') openAdjustDialog(btn.dataset.id, btn.dataset.name || btn.dataset.id);
+      else if (act === 'status') toggleAccountStatus(btn.dataset.id, btn.dataset.status);
+      else if (act === 'del') deleteAccount(btn.dataset.id, btn.dataset.name);
+      else if (act === 'editstock') openStockDialog(btn.dataset.code);
+      else if (act === 'delstock') deleteStock(btn.dataset.code, btn.dataset.name);
+      else if (act === 'admstat') {
+        var active = btn.dataset.active === '1';
+        api('/api/admin/admins/' + btn.dataset.id + '/status', {
+          method: 'POST',
+          body: JSON.stringify({ is_active: !active }),
+        }).then(function () {
+          notify('状态已更新');
+          loadAdmins();
+        }).catch(function (err) { notify(err.message); });
+      } else if (act === 'admdel') {
+        ask('删除管理员「' + btn.dataset.name + '」？', '删除管理员').then(function (ok) {
+          if (!ok) return;
+          return api('/api/admin/admins/' + btn.dataset.id, { method: 'DELETE' })
+            .then(function () {
+              notify('管理员已删除');
+              loadAdmins();
+            });
+        }).catch(function (err) { notify(err.message); });
+      }
+    });
+  }
+
+  /* -------------------------------------------------------------- 进入后台 */
+  function enterApp() {
+    if (!state.admin) {
+      api('/api/admin/me').then(function (d) {
+        state.admin = d.admin || null;
+        if (state.admin) $('who').textContent = state.admin.display_name || state.admin.username;
+      }).catch(function () { /* 401 已由 api() 统一处理 */ });
+    } else {
+      $('who').textContent = state.admin.display_name || state.admin.username;
+    }
+
+    setDrawer(isWide());
+
+    var hash = (window.location.hash || '').replace('#', '');
+    showPage(NAV_LOADER[hash] ? hash : 'overview');
+  }
+
+  function boot() {
+    bind();
+    if (token()) {
+      hideLogin();
+      enterApp();
+    } else {
+      showLogin('');
+    }
+
+    /* 窄屏切成宽屏时把抽屉展开，反之收起，避免半开状态 */
+    var wasWide = isWide();
+    window.addEventListener('resize', function () {
+      var now = isWide();
+      if (now === wasWide) return;
+      wasWide = now;
+      setDrawer(now);
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();

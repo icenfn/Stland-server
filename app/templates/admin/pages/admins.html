@@ -1,16 +1,28 @@
-{# 管理员 #}
-<section class="page" id="page-admins">
-  <div class="toolbar">
-    <button class="mdui-btn mdui-ripple mdui-btn-raised mdui-color-theme-accent" id="addAdmin"><i class="mdui-icon material-icons">person_add</i>新增管理员</button>
-    <button class="mdui-btn mdui-ripple mdui-btn-raised" id="refreshAdmins"><i class="mdui-icon material-icons">refresh</i>刷新</button>
+<section class="app-page" id="page-admins">
+  <div class="app-page-head">
+    <div class="app-page-title">管理员</div>
+    <div class="app-page-desc">后台账号独立存表，与交易账户互不相干</div>
+    <div class="app-toolbar">
+      <button class="mdui-btn mdui-ripple" id="refreshAdmins">刷新</button>
+      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent" id="addAdmin">新建管理员</button>
+    </div>
   </div>
 
-  <div class="mdui-table-fluid">
-    <table class="mdui-table">
-      <thead>
-        <tr><th>用户名</th><th>昵称</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
-      </thead>
-      <tbody id="adminsBody"></tbody>
-    </table>
+  <div class="mdui-card">
+    <div class="mdui-table-fluid">
+      <table class="mdui-table">
+        <thead>
+          <tr>
+            <th>登录名</th>
+            <th>显示名</th>
+            <th>状态</th>
+            <th>最近登录</th>
+            <th>创建时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="adminsBody"></tbody>
+      </table>
+    </div>
   </div>
 </section>

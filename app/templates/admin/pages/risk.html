@@ -1,26 +1,40 @@
-{# 风险偏好 #}
-<section class="page" id="page-risk">
-  <div class="toolbar">
-    <button class="mdui-btn mdui-ripple mdui-btn-raised" id="refreshRisk"><i class="mdui-icon material-icons">refresh</i>刷新</button>
+<section class="app-page" id="page-risk">
+  <div class="app-page-head">
+    <div class="app-page-title">风险偏好</div>
+    <div class="app-page-desc">当前分布与总资产排名，测评由客户端完成</div>
+    <div class="app-toolbar">
+      <button class="mdui-btn mdui-ripple" id="refreshRisk">刷新</button>
+    </div>
   </div>
 
-  <div class="mdui-card"><div class="mdui-card-content">
-    <div class="mdui-typo-title">风险测评分布</div>
-    <div class="kpi-grid" id="riskDist"></div>
-  </div></div>
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
+      <div class="app-card-title">分布</div>
+    </div>
+    <div class="app-card-body">
+      <div class="app-kpi-grid" id="riskDist"></div>
+    </div>
+  </div>
 
-  <div class="mdui-card"><div class="mdui-card-content">
-    <div class="mdui-typo-title">收益榜</div>
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
+      <div class="app-card-title">总资产排名</div>
+      <div class="app-card-sub">含零售与机构，按总资产降序</div>
+    </div>
     <div class="mdui-table-fluid">
       <table class="mdui-table">
         <thead>
           <tr>
-            <th>用户名</th><th>昵称</th><th>角色</th>
-            <th class="num">总资产</th><th class="num">已实现盈亏</th><th class="num">收益率</th>
+            <th>登录名</th>
+            <th>显示名</th>
+            <th>类型</th>
+            <th class="num">总资产</th>
+            <th class="num">已实现盈亏</th>
+            <th class="num">收益率</th>
           </tr>
         </thead>
         <tbody id="leaderboardBody"></tbody>
       </table>
     </div>
-  </div></div>
+  </div>
 </section>

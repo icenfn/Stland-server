@@ -1,24 +1,33 @@
-{# 撮合质量 #}
-<section class="page" id="page-ops">
-  <div class="toolbar">
-    <button class="mdui-btn mdui-ripple mdui-btn-raised" id="refreshOps"><i class="mdui-icon material-icons">refresh</i>刷新</button>
-    <button class="mdui-btn mdui-ripple mdui-btn-raised mdui-color-theme-accent" id="settleBtn">执行日终结转</button>
+<section class="app-page" id="page-ops">
+  <div class="app-page-head">
+    <div class="app-page-title">撮合质量</div>
+    <div class="app-page-desc">委托成交率、撤单率与成交额分布</div>
+    <div class="app-toolbar">
+      <button class="mdui-btn mdui-ripple" id="refreshOps">刷新</button>
+      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="settleBtn">日终结转</button>
+    </div>
   </div>
 
-  <div class="mdui-card"><div class="mdui-card-content">
-    <div class="mdui-typo-title">撮合指标</div>
-    <div class="kpi-grid" id="matchKpi"></div>
-  </div></div>
+  <div class="app-kpi-grid" id="matchKpi"></div>
 
-  <div class="mdui-card"><div class="mdui-card-content">
-    <div class="mdui-typo-title">成交最活跃标的</div>
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
+      <div class="app-card-title">成交额 Top 10</div>
+      <div class="app-card-sub">按累计成交额降序</div>
+    </div>
     <div class="mdui-table-fluid">
       <table class="mdui-table">
         <thead>
-          <tr><th>代码</th><th>名称</th><th class="num">成交笔数</th><th class="num">成交额</th><th class="num">成交量</th></tr>
+          <tr>
+            <th>代码</th>
+            <th>名称</th>
+            <th class="num">成交笔数</th>
+            <th class="num">成交额</th>
+            <th class="num">成交量</th>
+          </tr>
         </thead>
         <tbody id="matchBody"></tbody>
       </table>
     </div>
-  </div></div>
+  </div>
 </section>

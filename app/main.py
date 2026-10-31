@@ -103,15 +103,18 @@ templates = Jinja2Templates(directory=str(_TEMPLATES))
 # 侧边导航清单：顺序即菜单顺序，key 同时是模板文件名与 URL hash
 # icon 取 Material Icons 的 ligature 名，由 base.html 引入的字体渲染
 ADMIN_NAV = [
+    # icon 只能从 mdui 1.x 自带 Material Icons 字体里确实带连字的名字中选：
+    # admin_panel_settings / candlestick_chart / settings_suggest / shield / database
+    # 这几个较新的图标名在 1.x 字体里没有字形，会被原样显示成文字
     {"key": "overview", "label": "总览", "icon": "dashboard"},
     {"key": "retail", "label": "零售账户", "icon": "person"},
     {"key": "institution", "label": "机构账户", "icon": "business"},
-    {"key": "admins", "label": "管理员", "icon": "admin_panel_settings"},
-    {"key": "stocks", "label": "标的与指数", "icon": "candlestick_chart"},
-    {"key": "engine", "label": "模拟引擎", "icon": "settings_suggest"},
-    {"key": "risk", "label": "风险偏好", "icon": "shield"},
+    {"key": "admins", "label": "管理员", "icon": "supervisor_account"},
+    {"key": "stocks", "label": "标的与指数", "icon": "show_chart"},
+    {"key": "engine", "label": "模拟引擎", "icon": "settings_backup_restore"},
+    {"key": "risk", "label": "风险偏好", "icon": "security"},
     {"key": "config", "label": "系统配置", "icon": "tune"},
-    {"key": "data", "label": "数据初始化", "icon": "database"},
+    {"key": "data", "label": "数据初始化", "icon": "storage"},
     {"key": "ops", "label": "撮合质量", "icon": "swap_horiz"},
 ]
 

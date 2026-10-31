@@ -5,13 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>{% block title %}Stland 运营后台{% endblock %}</title>
 
-  {# mdui 1.x：自带完整组件样式（含表格），且内置 Material Icons 图标字体，
-     不需要再单独引入任何字体或图片资源 #}
+  {# mdui 1.x 完整包：组件样式（含 .mdui-table）与 Material Icons 图标字体都在里面 #}
   <link rel="stylesheet" href="/static/vendor/mdui/css/mdui.min.css" />
-  {# 这里只放分区显隐、间距、指标网格这类结构性样式，不写任何配色与外观 #}
+  {# app.css 只放结构：分区显隐、间距、指标网格、数字列对齐；配色一律走 mdui 主题类 #}
   <link rel="stylesheet" href="/static/admin/app.css" />
 </head>
-<body>
+{# 主色/强调色在这两个类上一次性指定：
+   mdui-theme-primary-indigo → 所有 mdui-color-theme / mdui-text-color-theme 变成靛蓝
+   mdui-theme-accent-pink    → 所有 mdui-color-theme-accent 变成粉
+   漏了它们，mdui 会退回默认的 amber(#ffc107)，看起来就是"没设主色"
+   mdui-appbar-with-toolbar  → 给 body 补 56/64px 顶部内边距，正文不再被固定顶栏压住
+   mdui-drawer-body-left     → 宽屏时给正文补 240px 左侧内边距，内容才不会钻到抽屉底下
+                               （这条规则本身就在 min-width:1024 的媒体查询里，窄屏不受影响）
+   app.js 会在抽屉收起时把这个类一并摘掉，避免宽屏下留下一条空白 #}
+<body class="mdui-theme-primary-indigo mdui-theme-accent-pink mdui-appbar-with-toolbar mdui-drawer-body-left app-body">
 {% block body %}{% endblock %}
 
 <script src="/static/vendor/mdui/js/mdui.min.js"></script>
