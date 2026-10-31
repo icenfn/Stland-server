@@ -90,8 +90,17 @@ body {
 
 /* 图标与文字都由 mdui 的 .mdui-list-item-icon / .mdui-list-item-content 定位，
    这里只保证整行可点、文字不换行溢出 */
+/* 导航项用 a 承载，必须显式指定颜色：
+   否则会吃到浏览器默认的链接蓝，和 mdui 列表项应有的深灰不一致 */
 .app-nav .mdui-list-item {
   padding-right: 16px;
+  color: rgba(0, 0, 0, 0.87);
+  text-decoration: none;
+}
+
+.app-nav .mdui-list-item-active {
+  color: #3f51b5;
+  font-weight: 500;
 }
 
 .app-nav .mdui-list-item-content {
