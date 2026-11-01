@@ -1,0 +1,34 @@
+<section class="app-page" id="page-boards">
+  <div class="app-page-head">
+    <div class="app-page-title">板块管理</div>
+    <div class="app-page-desc" id="boardCount">--</div>
+    <div class="app-toolbar">
+      <button class="mdui-btn mdui-ripple" id="refreshBoards">刷新</button>
+      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent" id="addBoard">新增板块</button>
+    </div>
+  </div>
+
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
+      <div class="app-card-title">板块规则</div>
+      <div class="app-card-sub">涨跌停价、最小报价单位与申报单位由板块决定，标的只记板块名</div>
+    </div>
+    <div class="mdui-table-fluid">
+      <table class="mdui-table">
+        <thead>
+          <tr>
+            <th>板块</th>
+            <th class="num">涨跌幅</th>
+            <th class="num">最小报价</th>
+            <th class="num">申报单位</th>
+            <th class="num">标的数</th>
+            <th class="num">排序</th>
+            <th>说明</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="boardsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>

@@ -17,8 +17,12 @@
     cfg: [],
     cfgDirty: {},
     stocks: [],
+    boards: [],
+    industries: [],
     accounts: {},
     editingStock: null,
+    editingBoard: null,
+    editingIndustry: null,
     adjustTarget: null,
     loginRequired: false,
   };
@@ -285,7 +289,8 @@
     admins: loadAdmins,
     stocks: function () { return Promise.all([loadStocks(), loadIndices()]); },
     engine: function () { return Promise.all([loadEngine(), loadConfig('engine')]); },
-    risk: loadRisk,
+    boards: loadBoards,
+    industries: loadIndustries,
     config: loadConfig,
     data: loadSeedStatus,
     ops: loadOps,
@@ -304,6 +309,15 @@
     for (var j = 0; j < pages.length; j += 1) {
       pages[j].classList.toggle('on', pages[j].id === 'page-' + key);
     }
+    // 子项被激活时把它所属的分组展开，否则收起的分组里看不到高亮项
+    var items2 = document.querySelectorAll('.nav-item');
+    for (var n = 0; n < items2.length; n += 1) {
+      if (items2[n].dataset.page === key) {
+        var grp = items2[n].closest ? items2[n].closest('.nav-group') : null;
+        if (grp) grp.classList.add('is-open');
+        break;
+      }
+    }
     $('pageTitle').textContent = label;
     state.page = key;
     if (window.history && window.history.replaceState) {
@@ -317,8 +331,10 @@
   /* ------------------------------------------------------------------ 总览 */
   function loadOverview() {
     $('ovKpi').innerHTML = '<div class="app-loading">加载中…</div>';
+    var board = null;
     api('/api/admin/dashboard').then(function (d) {
       var k = d.kpi || {};
+      board = d.leaderboard || null;
       $('ovKpi').innerHTML = [
         kpi('交易账户', int(k.user_count)),
         kpi('零售 / 机构', int(k.retail_count) + ' / ' + int(k.institution_count)),
@@ -343,17 +359,11 @@
         kpi('下跌家数', int(pick(m, ['down'], '--'))) +
         '</div>';
 
-      var r = d.risk_distribution || {};
-      $('ovRisk').innerHTML = [
-        kpi('账户总数', int(r.total)),
-        kpi('未测评', int(r.unassessed)),
-        kpi('保守型', int(r.conservative)),
-        kpi('稳健型', int(r.balanced)),
-        kpi('进取型', int(r.aggressive)),
-      ].join('');
     }).catch(function (e) {
       $('ovKpi').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
     });
+    // 排名与总览同屏：转结与风险页撤掉后，总资产排名就落在这里
+    return loadLeaderboard(board);
   }
 
   /* -------------------------------------------------------------- 交易账户 */
@@ -716,44 +726,214 @@
     }).catch(function (e) { notify(e.message); });
   }
 
-  /* -------------------------------------------------------------- 风险偏好 */
-  function loadRisk() {
-    return api('/api/admin/risk-summary').then(function (d) {
-      $('riskDist').innerHTML = [
-        kpi('账户总数', int(d.total)),
-        kpi('未测评', int(d.unassessed)),
-        kpi('保守型', int(d.conservative)),
-        kpi('稳健型', int(d.balanced)),
-        kpi('进取型', int(d.aggressive)),
-      ].join('');
-    }).catch(function (e) {
-      $('riskDist').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
-    }).then(loadLeaderboard);
-  }
-
-  function loadLeaderboard() {
+  /* -------------------------------------------------------------- 总资产排名 */
+  /* 排名并入总览后不再单独请求：dashboard 已经带了 leaderboard 字段，
+     再发一次请求只会让首屏多一个来回。传了数据就直接渲染。 */
+  function loadLeaderboard(prefetched) {
     var body = $('leaderboardBody');
-    body.innerHTML = emptyRow(6, '加载中…');
-    return api('/api/admin/leaderboard').then(function (d) {
-      var rows = d.items || [];
+    if (!body) return Promise.resolve();
+
+    function render(list) {
+      var rows = list || [];
       if (!rows.length) {
-        body.innerHTML = emptyRow(6, '暂无数据');
+        body.innerHTML = emptyRow(7, '暂无数据');
         return;
       }
-      body.innerHTML = rows.map(function (u) {
+      body.innerHTML = rows.map(function (u, i) {
         var cls = Number(u.realized_pnl) > 0 ? 'is-pos' : (Number(u.realized_pnl) < 0 ? 'is-neg' : '');
         return '<tr>' +
+          '<td class="num">' + (i + 1) + '</td>' +
           '<td>' + esc(u.username) + '</td>' +
           '<td>' + esc(u.display_name || '--') + '</td>' +
           '<td>' + esc(ROLE_LABEL[u.role] || u.role || '--') + '</td>' +
-          '<td class="num">' + num(u.total_asset) + '</td>' +
+          '<td class="num">' + money(u.total_asset) + '</td>' +
           '<td class="num ' + cls + '">' + num(u.realized_pnl) + '</td>' +
           '<td class="num ' + cls + '">' + pct(u.return_pct) + '</td>' +
           '</tr>';
       }).join('');
+    }
+
+    if (prefetched) { render(prefetched); return Promise.resolve(); }
+
+    body.innerHTML = emptyRow(7, '加载中…');
+    return api('/api/admin/dashboard').then(function (d) {
+      render(d.leaderboard);
     }).catch(function (e) {
-      body.innerHTML = emptyRow(6, e.message);
+      body.innerHTML = emptyRow(7, e.message);
     });
+  }
+
+  /* -------------------------------------------------------------- 板块管理 */
+  /* 板块承载规则：涨跌幅上限、最小报价单位、申报单位。
+     标的只记板块名，涨跌停由后端按板块表推算，所以改名必须连带改标的归属
+     （后端已处理），前端只需要把新的名字传上去。 */
+  function loadBoards() {
+    var body = $('boardsBody');
+    if (!body) return Promise.resolve();
+    body.innerHTML = emptyRow(8, '加载中…');
+    return api('/api/admin/boards').then(function (d) {
+      var rows = d.items || [];
+      state.boards = rows;
+      $('boardCount').textContent = '共 ' + rows.length + ' 个板块';
+      if (!rows.length) {
+        body.innerHTML = emptyRow(8, '暂无板块');
+        return;
+      }
+      body.innerHTML = rows.map(function (b) {
+        return '<tr>' +
+          '<td>' + esc(b.name) + '</td>' +
+          '<td class="num">±' + (Math.round(Number(b.limit_pct) * 1000) / 10) + '%</td>' +
+          '<td class="num">' + num(b.tick_size) + '</td>' +
+          '<td class="num">' + int(b.lot_size) + '</td>' +
+          '<td class="num">' + int(b.stock_count) + '</td>' +
+          '<td class="num">' + int(b.sort) + '</td>' +
+          '<td class="app-cell-sub">' + esc(b.description || '--') + '</td>' +
+          '<td>' +
+            rowBtn('编辑', 'data-act="editboard" data-name="' + esc(b.name) + '"') +
+            rowBtn('删除', 'data-act="delboard" data-name="' + esc(b.name) + '"', true) +
+          '</td>' +
+          '</tr>';
+      }).join('');
+    }).catch(function (e) {
+      body.innerHTML = emptyRow(8, e.message);
+    });
+  }
+
+  function openBoardDialog(name) {
+    var b = null;
+    if (name) {
+      b = state.boards.filter(function (x) { return x.name === name; })[0] || {};
+    }
+    state.editingBoard = name || null;
+    $('bdTitle').textContent = name ? '编辑板块 ' + name : '新增板块';
+    $('bdName').value = b ? (b.name || name) : '';
+    $('bdName').readOnly = !!name;
+    $('bdLimit').value = b && b.limit_pct !== undefined
+      ? Math.round(Number(b.limit_pct) * 1000) / 10 : 10;
+    $('bdTick').value = b && b.tick_size !== undefined ? b.tick_size : 0.01;
+    $('bdLot').value = b && b.lot_size !== undefined ? b.lot_size : 100;
+    $('bdSort').value = b && b.sort !== undefined ? b.sort : 0;
+    $('bdDesc').value = b ? (b.description || '') : '';
+    openDlg('dlgBoard');
+  }
+
+  function submitBoard() {
+    var name = $('bdName').value.trim();
+    if (!name) { notify('请填写板块名称'); return; }
+    var pct = Number($('bdLimit').value);
+    if (!(pct > 0 && pct <= 100)) { notify('涨跌幅百分比需在 0 到 100 之间'); return; }
+    var tick = Number($('bdTick').value);
+    var lot = Number($('bdLot').value);
+    if (!(tick > 0) || !(lot > 0)) { notify('最小报价与申报单位必须为正数'); return; }
+
+    var payload = {
+      name: name,
+      limit_pct: pct / 100,          // 界面按百分数填，接口收 0.10 这种比例
+      tick_size: tick,
+      lot_size: Math.round(lot),
+      description: $('bdDesc').value.trim(),
+      sort: Math.round(Number($('bdSort').value) || 0),
+    };
+    var editing = !!state.editingBoard;
+    var url = editing
+      ? '/api/admin/boards/' + encodeURIComponent(state.editingBoard)
+      : '/api/admin/boards';
+    api(url, { method: editing ? 'PUT' : 'POST', body: JSON.stringify(payload) })
+      .then(function () {
+        closeDlg('dlgBoard');
+        notify('已保存');
+        loadBoards();
+        loadStocks();
+      })
+      .catch(function (e) { notify(e.message); });
+  }
+
+  function deleteBoard(name) {
+    ask('删除板块「' + name + '」？其下还有标的时必须先改归属。', '删除板块').then(function (ok) {
+      if (!ok) return;
+      return api('/api/admin/boards/' + encodeURIComponent(name), { method: 'DELETE' })
+        .then(function () {
+          notify('板块已删除');
+          loadBoards();
+        });
+    }).catch(function (e) { notify(e.message); });
+  }
+
+  /* -------------------------------------------------------------- 行业管理 */
+  function loadIndustries() {
+    var body = $('industriesBody');
+    if (!body) return Promise.resolve();
+    body.innerHTML = emptyRow(5, '加载中…');
+    return api('/api/admin/industries').then(function (d) {
+      var rows = d.items || [];
+      state.industries = rows;
+      $('industryCount').textContent = '共 ' + rows.length + ' 个行业';
+      if (!rows.length) {
+        body.innerHTML = emptyRow(5, '暂无行业');
+        return;
+      }
+      body.innerHTML = rows.map(function (it) {
+        return '<tr>' +
+          '<td>' + esc(it.name) + '</td>' +
+          '<td class="num">' + int(it.stock_count) + '</td>' +
+          '<td class="num">' + int(it.sort) + '</td>' +
+          '<td class="app-cell-sub">' + esc(it.description || '--') + '</td>' +
+          '<td>' +
+            rowBtn('编辑', 'data-act="editindustry" data-name="' + esc(it.name) + '"') +
+            rowBtn('删除', 'data-act="delindustry" data-name="' + esc(it.name) + '"', true) +
+          '</td>' +
+          '</tr>';
+      }).join('');
+    }).catch(function (e) {
+      body.innerHTML = emptyRow(5, e.message);
+    });
+  }
+
+  function openIndustryDialog(name) {
+    var it = null;
+    if (name) {
+      it = state.industries.filter(function (x) { return x.name === name; })[0] || {};
+    }
+    state.editingIndustry = name || null;
+    $('inTitle').textContent = name ? '编辑行业 ' + name : '新增行业';
+    $('inName').value = it ? (it.name || name) : '';
+    $('inName').readOnly = !!name;
+    $('inSort').value = it && it.sort !== undefined ? it.sort : 0;
+    $('inDesc').value = it ? (it.description || '') : '';
+    openDlg('dlgIndustry');
+  }
+
+  function submitIndustry() {
+    var name = $('inName').value.trim();
+    if (!name) { notify('请填写行业名称'); return; }
+    var payload = {
+      name: name,
+      description: $('inDesc').value.trim(),
+      sort: Math.round(Number($('inSort').value) || 0),
+    };
+    var editing = !!state.editingIndustry;
+    var url = editing
+      ? '/api/admin/industries/' + encodeURIComponent(state.editingIndustry)
+      : '/api/admin/industries';
+    api(url, { method: editing ? 'PUT' : 'POST', body: JSON.stringify(payload) })
+      .then(function () {
+        closeDlg('dlgIndustry');
+        notify('已保存');
+        loadIndustries();
+        loadStocks();
+      })
+      .catch(function (e) { notify(e.message); });
+  }
+
+  function deleteIndustry(name) {
+    ask('删除行业「' + name + '」？其下还有标的时必须先改归属。', '删除行业').then(function (ok) {
+      if (!ok) return;
+      return api('/api/admin/industries/' + encodeURIComponent(name), { method: 'DELETE' })
+        .then(function () {
+          notify('行业已删除');
+          loadIndustries();
+        });
+    }).catch(function (e) { notify(e.message); });
   }
 
   /* -------------------------------------------------------------- 系统配置 */
@@ -934,22 +1114,19 @@
     });
   }
 
-  function settle() {
-    ask('确认执行日终结转？将解锁全部 T+1 持仓。', '日终结转').then(function (ok) {
-      if (!ok) return;
-      return api('/api/admin/settle', { method: 'POST' }).then(function () {
-        notify('结转完成');
-        loadOps();
-      });
-    }).catch(function (e) { notify(e.message); });
-  }
-
   /* ------------------------------------------------------------------ 绑定 */
   function bind() {
     $('navToggle').addEventListener('click', toggleDrawer);
 
     document.querySelectorAll('.nav-item').forEach(function (el) {
       el.addEventListener('click', function () { showPage(el.dataset.page); });
+    });
+
+    /* 分组头只管展开/收起，不切页面 */
+    document.querySelectorAll('.nav-group-head').forEach(function (head) {
+      head.addEventListener('click', function () {
+        head.parentNode.classList.toggle('is-open');
+      });
     });
 
     $('logoutBtn').addEventListener('click', doLogout);
@@ -1006,9 +1183,6 @@
     $('toggleEngine').addEventListener('click', toggleEngine);
     $('resetEngine').addEventListener('click', resetEngine);
 
-    /* 风险 */
-    $('refreshRisk').addEventListener('click', loadRisk);
-
     /* 配置 */
     $('refreshCfg').addEventListener('click', loadConfig);
     $('saveCfg').addEventListener('click', saveConfig);
@@ -1024,7 +1198,19 @@
 
     /* 撮合 */
     $('refreshOps').addEventListener('click', loadOps);
-    $('settleBtn').addEventListener('click', settle);
+
+    /* 板块 */
+    $('refreshBoards').addEventListener('click', loadBoards);
+    $('addBoard').addEventListener('click', function () { openBoardDialog(null); });
+
+    /* 行业 */
+    $('refreshIndustries').addEventListener('click', loadIndustries);
+    $('addIndustry').addEventListener('click', function () { openIndustryDialog(null); });
+
+    $('bdCancel').addEventListener('click', function () { closeDlg('dlgBoard'); });
+    $('bdSubmit').addEventListener('click', submitBoard);
+    $('inCancel').addEventListener('click', function () { closeDlg('dlgIndustry'); });
+    $('inSubmit').addEventListener('click', submitIndustry);
 
     /* 表格内的行内按钮统一在这里委托，只认 .row-btn，
        避免误吃顶栏或对话框里的 mdui 按钮 */
@@ -1036,6 +1222,10 @@
       else if (act === 'status') toggleAccountStatus(btn.dataset.id, btn.dataset.status);
       else if (act === 'del') deleteAccount(btn.dataset.id, btn.dataset.name);
       else if (act === 'editstock') openStockDialog(btn.dataset.code);
+      else if (act === 'editboard') openBoardDialog(btn.dataset.name);
+      else if (act === 'delboard') deleteBoard(btn.dataset.name);
+      else if (act === 'editindustry') openIndustryDialog(btn.dataset.name);
+      else if (act === 'delindustry') deleteIndustry(btn.dataset.name);
       else if (act === 'delstock') deleteStock(btn.dataset.code, btn.dataset.name);
       else if (act === 'admstat') {
         var active = btn.dataset.active === '1';

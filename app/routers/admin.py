@@ -31,8 +31,9 @@ from ..models import (
     Order,
     OrderStatus,
     Position,
-    QuoteTick,
     Role,
+    Board,
+    Industry,
     Stock,
     Trade,
     User,
@@ -41,7 +42,6 @@ from ..models import (
 )
 from ..security import hash_password, verify_password
 from ..services.deps import admin_user, issue_admin_token
-from ..services.trading import settle_all
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -159,30 +159,33 @@ def dashboard(session: Session = Depends(get_session), admin: Admin = Depends(ad
             "watch_items": session.exec(select(func.count()).select_from(WatchItem)).one(),
         },
         "market": market_engine.stats(),
-        "session": {
-            "phase": st.phase,
-            "label": st.label,
-            "can_trade": st.can_trade,
-            "trade_date": st.trade_date,
-        },
-        "risk_distribution": _risk_distribution(session),
+        # 完整时钟快照：结算模式 + 交易时段
+        "session": st.to_dict(),
+        # 总资产排名并入总览：它本身就是一张排行榜，
+        # 不值得单独占一个导航项，而应该一进后台就看到。
+        "leaderboard": _leaderboard(_session_users(session)),
     }
 
 
-def _risk_distribution(session: Session) -> dict:
-    """风险偏好分布：多少账户未测评、多少是保守/稳健/进取（只看交易账户）。"""
-    rows = session.exec(select(User)).all()
-    dist = {"unassessed": 0, "conservative": 0, "balanced": 0, "aggressive": 0}
-    for u in rows:
-        if u.risk_assessed_at <= 0 or u.risk_level <= 0:
-            dist["unassessed"] += 1
-        elif u.risk_level <= 1:
-            dist["conservative"] += 1
-        elif u.risk_level == 2:
-            dist["balanced"] += 1
-        else:
-            dist["aggressive"] += 1
-    return {"total": len(rows), **dist}
+def _session_users(session: Session) -> list[User]:
+    return list(session.exec(select(User)).all())
+
+
+def _leaderboard(users: list[User], limit: int = 20) -> list[dict]:
+    """按总资产排名（零售 + 机构）。"""
+    items = [
+        {
+            "username": u.username,
+            "display_name": u.display_name or u.username,
+            "role": u.role.value,
+            "total_asset": round(u.total_asset, 2),
+            "realized_pnl": round(u.realized_pnl, 2),
+            "return_pct": round(u.realized_pnl / u.total_asset * 100, 2) if u.total_asset else 0.0,
+        }
+        for u in users
+    ]
+    items.sort(key=lambda x: x["total_asset"], reverse=True)
+    return items[:limit]
 
 
 # --------------------------------------------------------------------------- #
@@ -525,11 +528,24 @@ class StockIn(BaseModel):
     float_shares: float = Field(default=5e8, gt=0)
 
 
-LIMIT_BY_BOARD = {"主板": 0.10, "创业板": 0.20, "科创板": 0.20}
+def _board_rules(session: Session, name: str) -> tuple[float, float, int]:
+    """取板块规则 (涨跌幅上限, 最小报价单位, 申报单位)。
+
+    板块规则是**数据**而不是常量：运营在「板块管理」里改一次，
+    新建与编辑标的时立刻生效，不必改代码重新发布。
+    板块不存在时回落主板口径（±10%、0.01、100 股），
+    避免因为漏建板块而凭空造出「不限涨跌」的标的。
+    """
+    row = session.exec(select(Board).where(Board.name == name)).first()
+    if row is None:
+        return 0.10, 0.01, 100
+    return row.limit_pct, row.tick_size, row.lot_size
 
 
-def _apply(stock: Stock, payload: StockIn) -> Stock:
-    pct = LIMIT_BY_BOARD.get(payload.board, 0.10)
+def _apply(stock: Stock, payload: StockIn, session: Session) -> Stock:
+    pct, tick_size, lot_size = _board_rules(session, payload.board)
+    stock.tick_size = tick_size
+    stock.lot_size = lot_size
     stock.name = payload.name
     stock.board = payload.board
     stock.industry = payload.industry
@@ -548,8 +564,8 @@ def _apply(stock: Stock, payload: StockIn) -> Stock:
     return stock
 
 
-def _register(stock: Stock) -> None:
-    pct = LIMIT_BY_BOARD.get(stock.board, 0.10)
+def _register(stock: Stock, session: Session) -> None:
+    pct, _tick, _lot = _board_rules(session, stock.board)
     market_engine.register(
         code=stock.code,
         name=stock.name,
@@ -572,10 +588,10 @@ def create_stock(
 ) -> dict:
     if session.get(Stock, payload.code) is not None:
         raise HTTPException(400, detail={"code": "DUP_CODE", "message": f"标的 {payload.code} 已存在"})
-    stock = _apply(Stock(code=payload.code, tick_size=0.01, lot_size=100), payload)
+    stock = _apply(Stock(code=payload.code, tick_size=0.01, lot_size=100), payload, session)
     session.add(stock)
     session.commit()
-    _register(stock)
+    _register(stock, session)
     return {"ok": True, "code": stock.code}
 
 
@@ -591,10 +607,10 @@ def update_stock(
         raise HTTPException(404, detail={"code": "STOCK_NOT_FOUND", "message": "标的不存在"})
     if payload.code != code:
         raise HTTPException(400, detail={"code": "CODE_IMMUTABLE", "message": "代码不可修改，如需换码请删除后新增"})
-    _apply(stock, payload)
+    _apply(stock, payload, session)
     session.add(stock)
     session.commit()
-    _register(stock)
+    _register(stock, session)
     return {"ok": True, "code": code}
 
 
@@ -616,15 +632,213 @@ def delete_stock(
     # 真删除：这一步就是「这支不要了」，不做软删除、不留下架标记。
     # 先清掉依附在这支标的上的行情与自选成分 —— 委托与成交流水属于账户侧历史，
     # 保留不动，删标的不能让别人的对账记录跟着消失。
-    for model in (DailyBar, QuoteTick):
-        for row in session.exec(select(model).where(model.code == code)).all():
-            session.delete(row)
+    # 只清日线快照：委托与成交流水属于账户侧历史，
+    # 删标的不能让别人的对账记录跟着消失。
+    for row in session.exec(select(DailyBar).where(DailyBar.code == code)).all():
+        session.delete(row)
     for row in session.exec(select(WatchItem).where(WatchItem.code == code)).all():
         session.delete(row)
 
     session.delete(stock)
     session.commit()
     market_engine.unregister(code)
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# 板块管理
+# --------------------------------------------------------------------------- #
+class BoardIn(BaseModel):
+    """板块写入体。板块承载涨跌停与报价精度规则，这几项都是必填口径。"""
+
+    name: str
+    limit_pct: float = 0.10
+    tick_size: float = 0.01
+    lot_size: int = 100
+    description: str = ""
+    sort: int = 0
+
+
+def _board_counts(session: Session) -> dict[str, int]:
+    """每个板块下的标的数。板块规则一改会影响哪些标的，列表上要能看清。"""
+    counts: dict[str, int] = {}
+    for st in session.exec(select(Stock)).all():
+        counts[st.board] = counts.get(st.board, 0) + 1
+    return counts
+
+
+@router.get("/boards")
+def list_boards(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    counts = _board_counts(session)
+    rows = session.exec(select(Board).order_by(Board.sort, Board.name)).all()
+    return {
+        "items": [
+            {
+                "name": b.name,
+                "limit_pct": b.limit_pct,
+                "tick_size": b.tick_size,
+                "lot_size": b.lot_size,
+                "description": b.description,
+                "sort": b.sort,
+                "stock_count": counts.get(b.name, 0),
+            }
+            for b in rows
+        ]
+    }
+
+
+@router.post("/boards")
+def create_board(
+    payload: BoardIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="板块名称不能为空")
+    if not (0 < payload.limit_pct <= 1):
+        raise HTTPException(status_code=400, detail="涨跌幅需在 (0, 1] 之间，如 0.10 表示 ±10%")
+    if payload.tick_size <= 0 or payload.lot_size <= 0:
+        raise HTTPException(status_code=400, detail="最小报价单位与申报单位必须为正数")
+    if session.exec(select(Board).where(Board.name == name)).first():
+        raise HTTPException(status_code=400, detail=f"板块「{name}」已存在")
+    session.add(Board(**{**payload.model_dump(), "name": name}))
+    session.commit()
+    return {"ok": True}
+
+
+@router.put("/boards/{name}")
+def update_board(
+    name: str,
+    payload: BoardIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    row = session.exec(select(Board).where(Board.name == name)).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="板块不存在")
+    if not (0 < payload.limit_pct <= 1):
+        raise HTTPException(status_code=400, detail="涨跌幅需在 (0, 1] 之间")
+    new_name = payload.name.strip() or name
+    if new_name != name:
+        if session.exec(select(Board).where(Board.name == new_name)).first():
+            raise HTTPException(status_code=400, detail=f"板块「{new_name}」已存在")
+        # 改名必须同步标的归属：否则这批标的会挂在一个不存在的板块上，
+        # 涨跌停推算回落到主板口径，涨跌幅会突然从 ±20% 变成 ±10%。
+        for st in session.exec(select(Stock).where(Stock.board == name)).all():
+            st.board = new_name
+            session.add(st)
+        row.name = new_name
+    row.limit_pct = payload.limit_pct
+    row.tick_size = payload.tick_size
+    row.lot_size = payload.lot_size
+    row.description = payload.description
+    row.sort = payload.sort
+    session.add(row)
+    session.commit()
+    return {"ok": True}
+
+
+@router.delete("/boards/{name}")
+def delete_board(
+    name: str,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    row = session.exec(select(Board).where(Board.name == name)).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="板块不存在")
+    used = session.exec(select(func.count()).select_from(Stock).where(Stock.board == name)).one()
+    if used:
+        raise HTTPException(status_code=400, detail=f"该板块下还有 {used} 个标的，请先调整标的归属")
+    session.delete(row)
+    session.commit()
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# 行业管理
+# --------------------------------------------------------------------------- #
+class IndustryIn(BaseModel):
+    name: str
+    description: str = ""
+    sort: int = 0
+
+
+@router.get("/industries")
+def list_industries(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
+    counts: dict[str, int] = {}
+    for st in session.exec(select(Stock)).all():
+        counts[st.industry] = counts.get(st.industry, 0) + 1
+    rows = session.exec(select(Industry).order_by(Industry.sort, Industry.name)).all()
+    return {
+        "items": [
+            {
+                "name": it.name,
+                "description": it.description,
+                "sort": it.sort,
+                "stock_count": counts.get(it.name, 0),
+            }
+            for it in rows
+        ]
+    }
+
+
+@router.post("/industries")
+def create_industry(
+    payload: IndustryIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="行业名称不能为空")
+    if session.exec(select(Industry).where(Industry.name == name)).first():
+        raise HTTPException(status_code=400, detail=f"行业「{name}」已存在")
+    session.add(Industry(**{**payload.model_dump(), "name": name}))
+    session.commit()
+    return {"ok": True}
+
+
+@router.put("/industries/{name}")
+def update_industry(
+    name: str,
+    payload: IndustryIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    row = session.exec(select(Industry).where(Industry.name == name)).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="行业不存在")
+    new_name = payload.name.strip() or name
+    if new_name != name:
+        if session.exec(select(Industry).where(Industry.name == new_name)).first():
+            raise HTTPException(status_code=400, detail=f"行业「{new_name}」已存在")
+        for st in session.exec(select(Stock).where(Stock.industry == name)).all():
+            st.industry = new_name
+            session.add(st)
+        row.name = new_name
+    row.description = payload.description
+    row.sort = payload.sort
+    session.add(row)
+    session.commit()
+    return {"ok": True}
+
+
+@router.delete("/industries/{name}")
+def delete_industry(
+    name: str,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    row = session.exec(select(Industry).where(Industry.name == name)).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="行业不存在")
+    used = session.exec(select(func.count()).select_from(Stock).where(Stock.industry == name)).one()
+    if used:
+        raise HTTPException(status_code=400, detail=f"该行业下还有 {used} 个标的，请先调整标的归属")
+    session.delete(row)
+    session.commit()
     return {"ok": True}
 
 
@@ -747,38 +961,3 @@ def matching_stats(session: Session = Depends(get_session), admin: Admin = Depen
         "avg_trade_amount": avg_amount,
         "top_symbols": top,
     }
-
-
-@router.get("/leaderboard")
-def leaderboard(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
-    """按总资产排名（交易账户）。"""
-    rows = session.exec(select(User)).all()
-    items = [
-        {
-            "username": u.username,
-            "display_name": u.display_name or u.username,
-            "role": u.role.value,
-            "total_asset": round(u.total_asset, 2),
-            "realized_pnl": round(u.realized_pnl, 2),
-            "return_pct": round(u.realized_pnl / u.total_asset * 100, 2) if u.total_asset else 0.0,
-        }
-        for u in rows
-    ]
-    items.sort(key=lambda x: x["total_asset"], reverse=True)
-    return {"items": items}
-
-
-@router.post("/settle")
-def settle(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
-    """执行日终结转（T+1 解锁）。"""
-    settle_all(session)
-    return {"ok": True, "at": int(time.time())}
-
-
-# --------------------------------------------------------------------------- #
-# 风险偏好（只读汇总，无历史档案）
-# --------------------------------------------------------------------------- #
-@router.get("/risk-summary")
-def risk_summary(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
-    """风险偏好分布（零售 + 机构）。历史档案功能已移除，这里只给当前分布。"""
-    return _risk_distribution(session)

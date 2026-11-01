@@ -33,11 +33,31 @@
 
   <nav class="app-nav">
     {% for item in nav %}
-    <a href="javascript:;" class="mdui-list-item mdui-ripple nav-item{% if loop.first %} mdui-list-item-active{% endif %}"
-       data-page="{{ item.key }}" data-label="{{ item.label }}">
-      <i class="mdui-list-item-icon mdui-icon material-icons">{{ item.icon }}</i>
-      <div class="mdui-list-item-content">{{ item.label }}</div>
-    </a>
+      {% if item.children %}
+      {# 分组：一级只负责展开/收起，不切换页面 #}
+      <div class="nav-group" data-group="{{ item.key }}">
+        <a href="javascript:;" class="mdui-list-item mdui-ripple nav-group-head">
+          <i class="mdui-list-item-icon mdui-icon material-icons">{{ item.icon }}</i>
+          <div class="mdui-list-item-content">{{ item.label }}</div>
+          <i class="mdui-list-item-icon mdui-icon material-icons nav-caret">expand_more</i>
+        </a>
+        <div class="nav-group-body">
+          {% for child in item.children %}
+          <a href="javascript:;" class="mdui-list-item mdui-ripple nav-item nav-child"
+             data-page="{{ child.key }}" data-label="{{ child.label }}">
+            <i class="mdui-list-item-icon mdui-icon material-icons">{{ child.icon }}</i>
+            <div class="mdui-list-item-content">{{ child.label }}</div>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <a href="javascript:;" class="mdui-list-item mdui-ripple nav-item"
+         data-page="{{ item.key }}" data-label="{{ item.label }}">
+        <i class="mdui-list-item-icon mdui-icon material-icons">{{ item.icon }}</i>
+        <div class="mdui-list-item-content">{{ item.label }}</div>
+      </a>
+      {% endif %}
     {% endfor %}
   </nav>
 
@@ -52,7 +72,8 @@
   {% include "admin/pages/admins.html" %}
   {% include "admin/pages/stocks.html" %}
   {% include "admin/pages/engine.html" %}
-  {% include "admin/pages/risk.html" %}
+  {% include "admin/pages/boards.html" %}
+  {% include "admin/pages/industries.html" %}
   {% include "admin/pages/config.html" %}
   {% include "admin/pages/data.html" %}
   {% include "admin/pages/ops.html" %}
@@ -179,6 +200,71 @@
   <div class="mdui-dialog-actions">
     <button class="mdui-btn mdui-ripple" id="ajCancel">取消</button>
     <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="ajSubmit">提交</button>
+  </div>
+</div>
+
+
+<div class="mdui-dialog" id="dlgBoard">
+  <div class="mdui-dialog-title" id="bdTitle">新增板块</div>
+  <div class="mdui-dialog-content">
+    <div class="app-field">
+      <label class="app-field-label" for="bdName">板块名称</label>
+      <input class="app-select" id="bdName" autocomplete="off" placeholder="如 主板 / 创业板 / 北交所" />
+    </div>
+    <div class="app-inline">
+      <div class="app-field">
+        <label class="app-field-label" for="bdLimit">涨跌幅上限（%）</label>
+        <input class="app-select" id="bdLimit" type="number" step="0.5" value="10" />
+      </div>
+      <div class="app-field">
+        <label class="app-field-label" for="bdTick">最小报价单位</label>
+        <input class="app-select" id="bdTick" type="number" step="0.001" value="0.01" />
+      </div>
+    </div>
+    <div class="app-inline">
+      <div class="app-field">
+        <label class="app-field-label" for="bdLot">申报数量单位（股）</label>
+        <input class="app-select" id="bdLot" type="number" step="100" value="100" />
+      </div>
+      <div class="app-field">
+        <label class="app-field-label" for="bdSort">排序</label>
+        <input class="app-select" id="bdSort" type="number" step="1" value="0" />
+      </div>
+    </div>
+    <div class="app-field">
+      <label class="app-field-label" for="bdDesc">说明</label>
+      <input class="app-select" id="bdDesc" autocomplete="off" placeholder="可留空" />
+    </div>
+    <div class="app-field-hint">
+      标的的涨跌停价由所属板块推算，改板块规则会直接影响该板块下全部标的；改名会同步迁移标的归属。
+    </div>
+  </div>
+  <div class="mdui-dialog-actions">
+    <button class="mdui-btn mdui-ripple" id="bdCancel">取消</button>
+    <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="bdSubmit">保存</button>
+  </div>
+</div>
+
+<div class="mdui-dialog" id="dlgIndustry">
+  <div class="mdui-dialog-title" id="inTitle">新增行业</div>
+  <div class="mdui-dialog-content">
+    <div class="app-field">
+      <label class="app-field-label" for="inName">行业名称</label>
+      <input class="app-select" id="inName" autocomplete="off" placeholder="如 半导体 / 白酒" />
+    </div>
+    <div class="app-field">
+      <label class="app-field-label" for="inSort">排序</label>
+      <input class="app-select" id="inSort" type="number" step="1" value="0" />
+    </div>
+    <div class="app-field">
+      <label class="app-field-label" for="inDesc">说明</label>
+      <input class="app-select" id="inDesc" autocomplete="off" placeholder="可留空" />
+    </div>
+    <div class="app-field-hint">标的通过行业名归属，改名会同步迁移该行业下的标的。</div>
+  </div>
+  <div class="mdui-dialog-actions">
+    <button class="mdui-btn mdui-ripple" id="inCancel">取消</button>
+    <button class="mdui-btn mdui-ripple mdui-color-theme-accent" id="inSubmit">保存</button>
   </div>
 </div>
 

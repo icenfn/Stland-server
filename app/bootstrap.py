@@ -18,9 +18,9 @@ from . import runtime_config
 from .config import settings
 from .db import engine, init_db, session_scope
 from .engine.market import market_engine
-from .engine.seed import LIMIT_BY_BOARD, SEED_STOCKS, SEED_USERS
+from .engine.seed import SEED_BOARDS, SEED_STOCKS, SEED_USERS, LIMIT_BY_BOARD
 from .engine.session import current_session
-from .models import Admin, DailyBar, Role, Stock, User
+from .models import Admin, Board, DailyBar, Industry, Role, Stock, User
 from .security import hash_password
 from .services.trading import rematch_pending, settle_all
 
@@ -43,12 +43,16 @@ def ensure_stocks(session: Session) -> int:
         种子只是「默认值」，需要彻底删掉某支标的请在删除后不再改动种子）。
     """
     existing = {s.code for s in session.exec(select(Stock)).all()}
+    # 板块规则以库里为准：种子标的的涨跌停必须跟着运营改过的板块规则走，
+    # 否则「板块管理」里把创业板改成别的比例后，重新初始化数据又会打回 20%。
+    rules = {b.name: (b.limit_pct, b.tick_size, b.lot_size)
+             for b in session.exec(select(Board)).all()}
 
     added = 0
     for seed in SEED_STOCKS:
         if seed.code in existing:
             continue
-        pct = LIMIT_BY_BOARD.get(seed.board, 0.10)
+        pct = rules.get(seed.board, (LIMIT_BY_BOARD.get(seed.board, 0.10), 0.01, 100))[0]
         session.add(
             Stock(
                 code=seed.code,
@@ -74,6 +78,50 @@ def ensure_stocks(session: Session) -> int:
         added += 1
     session.commit()
     return added
+
+
+def ensure_boards(session: Session) -> int:
+    """注入默认板块（幂等，绝不覆盖运营改过的规则）。
+
+    板块是标的涨跌停的唯一来源：表为空时 `_board_rules()` 会回落到主板口径，
+    创业板的 ±20% 会悄悄变成 ±10% —— 这类静默降级只能靠建库时补齐数据避免。
+    """
+    existing = {b.name for b in session.exec(select(Board)).all()}
+    added = 0
+    for seed in SEED_BOARDS:
+        if seed.name in existing:
+            continue
+        session.add(
+            Board(
+                name=seed.name,
+                limit_pct=seed.limit_pct,
+                tick_size=seed.tick_size,
+                lot_size=seed.lot_size,
+                description=seed.description,
+                sort=seed.sort,
+            )
+        )
+        added += 1
+    session.commit()
+    return added
+
+
+def ensure_industries(session: Session) -> int:
+    """把种子标的用到的行业补进 industry 表（幂等）。
+
+    行业只是分类，不承载规则；漏建不影响交易，但会让「行业管理」页缺项，
+    与标的列表里出现的行业名对不上。
+    """
+    existing = {it.name for it in session.exec(select(Industry)).all()}
+    wanted: list[str] = []
+    for seed in SEED_STOCKS:
+        if seed.industry and seed.industry not in existing and seed.industry not in wanted:
+            wanted.append(seed.industry)
+    for i, name in enumerate(wanted):
+        session.add(Industry(name=name, description="", sort=(i + 1) * 10))
+    if wanted:
+        session.commit()
+    return len(wanted)
 
 
 def ensure_users(session: Session) -> int:
@@ -203,6 +251,9 @@ def bootstrap() -> dict:
     register_engine()
     with session_scope() as session:
         ensure_admin(session)
+        # 板块是标的规则的来源，必须先于任何标的写入存在
+        ensure_boards(session)
+        ensure_industries(session)
         stocks = len(session.exec(select(Stock)).all())
         users = len(session.exec(select(User)).all())
         admins = len(session.exec(select(Admin)).all())
@@ -211,8 +262,12 @@ def bootstrap() -> dict:
 
 def init_seed_data(include_stocks: bool = True, include_users: bool = True, include_history: bool = True) -> dict:
     """后台「初始化数据」按钮的实现：显式注入标准数据集（幂等）。"""
-    result = {"stocks_added": 0, "users_added": 0, "daily_bars_added": 0}
+    result = {"boards_added": 0, "industries_added": 0, "stocks_added": 0, "users_added": 0, "daily_bars_added": 0}
     with session_scope() as session:
+        # 老库升级上来时 board 表是空的，先补齐规则再写标的，
+        # 否则种子的涨跌停会按回落口径算错
+        result["boards_added"] = ensure_boards(session)
+        result["industries_added"] = ensure_industries(session)
         if include_stocks:
             result["stocks_added"] = ensure_stocks(session)
         if include_users:

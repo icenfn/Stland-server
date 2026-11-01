@@ -24,6 +24,13 @@ body {
    -------------------------------------------------------------------------- */
 /* mdui 的抽屉默认 top:0 并自带滚动；这里让它从顶栏下方开始，
    滚动交给内层 .app-nav，避免抽屉与列表出现两条滚动条 */
+/* 层级必须显式拉开：mdui 1.x 里 .mdui-overlay 的 z-index 高于抽屉，
+   抽屉展开时遮罩会把侧边栏一起罩灰，看起来像「抽屉被禁用了」。
+   顶栏 → 抽屉 → 遮罩，逐层递减。 */
+.mdui-appbar-fixed {
+  z-index: 4000;
+}
+
 .app-drawer {
   top: 56px;
   height: calc(100% - 56px);
@@ -32,6 +39,11 @@ body {
   width: 240px;
   overflow: hidden;
   background: #fff;
+  z-index: 3900;
+}
+
+.mdui-overlay {
+  z-index: 3800;
 }
 
 @media (min-width: 1024px) {
@@ -108,6 +120,46 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------- 导航分组 */
+/* 一级分组只负责展开/收起；箭头用 mdui 的 expand_more 连字，展开时翻转 180° */
+.app-nav .nav-group-head {
+  cursor: pointer;
+}
+
+.app-nav .nav-caret {
+  flex: 0 0 auto;
+  margin-right: 0;
+  transition: transform 0.2s ease;
+}
+
+.app-nav .nav-group.is-open .nav-caret {
+  transform: rotate(180deg);
+}
+
+/* 折叠靠 max-height 过渡：侧边栏子项数量固定且不多，不必上 JS 测高度 */
+.app-nav .nav-group-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.24s ease;
+}
+
+.app-nav .nav-group.is-open .nav-group-body {
+  max-height: 400px;
+}
+
+/* 二级项缩进对齐一级项的文字左边缘（图标 24 + 两侧 16 + 16） */
+.app-nav .nav-child {
+  padding-left: 56px;
+}
+
+.app-nav .nav-child .mdui-list-item-icon {
+  display: none;
+}
+
+.app-nav .nav-child .mdui-list-item-content {
+  font-size: 13px;
 }
 
 .app-nav-foot {

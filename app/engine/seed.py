@@ -25,8 +25,32 @@ class SeedStock:
     liquidity: float
 
 
-# 涨跌幅限制：主板 10%，创业板/科创板 20%
-LIMIT_BY_BOARD = {"主板": 0.10, "创业板": 0.20, "科创板": 0.20}
+@dataclass(frozen=True)
+class SeedBoard:
+    """板块规则的默认值。
+
+    板块已经变成**数据**（`board` 表）而不是常量：运营在「板块管理」里改一次，
+    新建与编辑标的立刻按新规则算涨跌停。这里的默认值只在建库时注入一次，
+    之后以库里为准，不会被覆盖。
+    """
+
+    name: str
+    limit_pct: float
+    tick_size: float
+    lot_size: int
+    description: str
+    sort: int
+
+
+SEED_BOARDS: tuple[SeedBoard, ...] = (
+    SeedBoard("主板", 0.10, 0.01, 100, "沪深主板，涨跌幅 ±10%，申报 100 股起", 10),
+    SeedBoard("创业板", 0.20, 0.01, 100, "创业板，涨跌幅 ±20%，申报 100 股起", 20),
+    SeedBoard("科创板", 0.20, 0.01, 200, "科创板，涨跌幅 ±20%，申报 200 股起", 30),
+    SeedBoard("北交所", 0.30, 0.01, 100, "北交所，涨跌幅 ±30%，申报 100 股起", 40),
+)
+
+# 仅用于种子标的的初始涨跌停推算；运行期一律查 board 表。
+LIMIT_BY_BOARD = {b.name: b.limit_pct for b in SEED_BOARDS}
 
 SEED_STOCKS: tuple[SeedStock, ...] = (
     # ---------------- 2026 年度网络热词 ----------------

@@ -418,7 +418,8 @@ class MarketEngine:
                 # 价格较粗）会连续几十个 tick 价格一模一样，图上是一条直线。
                 tick_move_p = min(0.35, 0.08 * volatility)
                 if new_price == st.price and rng.random() < tick_move_p:
-                    new_price = snap(st.price + (tick if rng.random() < 0.5 else -tick), st.tick_size)
+                    step = st.tick_size
+                    new_price = snap(st.price + (step if rng.random() < 0.5 else -step), st.tick_size)
 
                 new_price = clip(new_price, st.limit_down, st.limit_up)
                 st.price = new_price

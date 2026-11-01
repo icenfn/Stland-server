@@ -168,6 +168,34 @@ class WatchItem(SQLModel, table=True):
     created_at: float = Field(default_factory=now_ts)
 
 
+class Board(SQLModel, table=True):
+    """板块（主板 / 创业板 / 科创板 / 北交所 …）。
+
+    板块承载的是**规则**：涨跌幅上限、最小报价单位、申报数量单位。
+    因此它不与 ``Stock`` 建外键，而是按名称关联 —— 标的改板只需换一个名字，
+    涨跌停由板块表推算，不必在标的上再抄一份比例。
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True, max_length=12)
+    limit_pct: float = Field(default=0.10)   # 涨跌幅上限，0.10 = ±10%
+    tick_size: float = Field(default=0.01)   # 最小报价单位
+    lot_size: int = Field(default=100)       # 申报数量单位（股）
+    description: str = Field(default="", max_length=120)
+    sort: int = Field(default=0)
+    created_at: float = Field(default_factory=now_ts)
+
+
+class Industry(SQLModel, table=True):
+    """行业分类。与 ``Stock.industry`` 按名称关联，用于行业分布与筛选。"""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True, max_length=24)
+    description: str = Field(default="", max_length=120)
+    sort: int = Field(default=0)
+    created_at: float = Field(default_factory=now_ts)
+
+
 class Stock(SQLModel, table=True):
     """标的元数据。价格上限/下限与最小报价单位决定价格格子（tick grid）。"""
 
@@ -193,26 +221,6 @@ class Stock(SQLModel, table=True):
     vol: float = Field(default=0.35)          # 年化波动率
     beta: float = Field(default=1.0)          # 对市场因子的敏感度
     liquidity: float = Field(default=1.0)     # 相对流动性（影响挂单深度）
-
-
-class QuoteTick(SQLModel, table=True):
-    """逐笔行情快照（tick 级），支撑分时与 K 线合成。"""
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    code: str = Field(index=True, max_length=12)
-    ts: float = Field(default_factory=now_ts, index=True)
-    price: float = 0.0
-    open: float = 0.0
-    high: float = 0.0
-    low: float = 0.0
-    prev_close: float = 0.0
-    volume: int = 0
-    amount: float = 0.0
-    bid: float = 0.0
-    ask: float = 0.0
-    bid_volume: int = 0
-    ask_volume: int = 0
-    turnover_rate: float = 0.0
 
 
 class DailyBar(SQLModel, table=True):
