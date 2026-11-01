@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import time
 from contextlib import asynccontextmanager
 
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -141,6 +142,69 @@ if _STATIC.is_dir():
     app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
 
+# ---------------------------------------------------------------------------
+# 管理后台登录态
+# ---------------------------------------------------------------------------
+# 为什么用「服务端内存会话 + 随机串 Cookie」而不是把 JWT 直接发给浏览器：
+# 后台只需要「已登录 / 未登录」两态，用不透明的随机会话号更省事，也不会
+# 因为 token 里带了可解析字段而被前端逻辑误用。cookie 走 HttpOnly，
+# 页面脚本读不到它，XSS 也偷不走管理权限。
+ADMIN_COOKIE = "stland_admin"
+ADMIN_SESSION_TTL = 12 * 3600
+_ADMIN_SESSIONS: dict[str, float] = {}
+
+
+def _admin_logged_in(request: Request) -> bool:
+    sid = request.cookies.get(ADMIN_COOKIE)
+    if not sid:
+        return False
+    exp = _ADMIN_SESSIONS.get(sid)
+    if exp is None:
+        return False
+    if exp < time.time():
+        _ADMIN_SESSIONS.pop(sid, None)
+        return False
+    return True
+
+
+@app.middleware("http")
+async def _admin_session_middleware(request: Request, call_next):
+    """登录成功时下发会话 Cookie。
+
+    放在中间件里而不是改登录路由：登录成功与否由 /api/admin/login 的响应
+    状态码决定（200 即成功），中间件不需要解析响应体，也不必改动该路由
+    既有的返回结构。
+    """
+    response = await call_next(request)
+    if request.url.path == "/api/admin/login" and response.status_code == 200:
+        sid = secrets.token_urlsafe(32)
+        _ADMIN_SESSIONS[sid] = time.time() + ADMIN_SESSION_TTL
+        response.set_cookie(
+            ADMIN_COOKIE,
+            sid,
+            max_age=ADMIN_SESSION_TTL,
+            httponly=True,
+            samesite="lax",
+            path="/",
+        )
+        # 顺手清掉过期会话，避免字典无限增长
+        now = time.time()
+        for old in [k for k, v in _ADMIN_SESSIONS.items() if v < now]:
+            _ADMIN_SESSIONS.pop(old, None)
+    return response
+
+
+@app.get("/admin/logout", include_in_schema=False)
+def admin_logout(request: Request):
+    """退出登录：撤销内存会话并清除 Cookie。"""
+    sid = request.cookies.get(ADMIN_COOKIE)
+    if sid:
+        _ADMIN_SESSIONS.pop(sid, None)
+    resp = RedirectResponse("/admin/login", status_code=302)
+    resp.delete_cookie(ADMIN_COOKIE, path="/")
+    return resp
+
+
 @app.get("/admin/login", include_in_schema=False)
 def admin_login_page(request: Request):
     """独立登录页：不套后台面板的壳，避免登录框被应用栏与侧边栏挤在里面。"""
@@ -149,6 +213,10 @@ def admin_login_page(request: Request):
 
 @app.get("/admin", include_in_schema=False)
 def admin_panel(request: Request):
+    # 面板本身只是一张静态壳，但它会拉取 /api/admin/* 数据；
+    # 不做这层跳转的话，未登录用户能直接看到空白面板并触发一串 401。
+    if not _admin_logged_in(request):
+        return RedirectResponse("/admin/login", status_code=302)
     return templates.TemplateResponse(
         request,
         "admin/index.html",

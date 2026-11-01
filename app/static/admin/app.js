@@ -174,8 +174,8 @@
       });
     }).catch(function (err) {
       if (err.status === 401) {
-        setToken('');
-        showLogin('登录已过期，请重新登录');
+        // 会话失效就回独立登录页：面板里已经没有登录框，不能再往 showLogin 走
+        window.location.href = '/admin/login';
       }
       throw err;
     });
@@ -209,86 +209,49 @@
     return window.innerWidth >= 1024;
   }
 
-  /* 抽屉的开关自己记状态：宽屏才让正文让出 240px。
-     mdui 1.x 的让位靠 body 上的 mdui-drawer-body-left，必须跟着开关一起切，
-     否则宽屏收起抽屉后右侧会留一条 240px 的空白。 */
-  /**
-   * 抽屉状态**必须**以 DOM 为准，不能自己维护一个布尔镜像。
-   *
-   * 原实现用 `var drawerOpen = true` 记住状态，但窄屏下 mdui 实际是关闭的，
-   * 而且用户点遮罩关抽屉时 mdui 自己把 drawer 收起了、这个变量却还是 true。
-   * 于是下一次点击算出来「关 → 开」= 关，看起来就要点两次才打开。
-   * 改成每次从 body 上的 mdui 类名读真实状态，镜像变量彻底去掉。
-   */
-  function drawerIsOpen() {
-    return document.body.classList.contains('mdui-drawer-body-left');
+  /* 抽屉开关一律交给 mdui 自己的状态机。
+     mdui.Drawer 内部维护开关状态并提供 open/close/toggle/getState，
+     自己再存一个布尔值必然与它不同步 —— 用户点遮罩关闭时 mdui 收起了抽屉，
+     我们那份状态还停在「打开」，下一次点击算出来就是「关 → 开」= 关，
+     表现就是要点两次才有反应。这里改成直接调原生 toggle()。 */
+  function drawerState() {
+    var d = navDrawer();
+    if (!d || typeof d.getState !== 'function') return false;
+    return !!d.getState();
+  }
+
+  /* 宽屏时正文要让出 240px（mdui 的让位类），窄屏则铺满。
+     这个类只跟「宽屏 + 抽屉已开」有关，绝不能拿它当抽屉开合的依据。 */
+  function syncBodyOffset() {
+    document.body.classList.toggle('mdui-drawer-body-left', drawerState() && isWide());
   }
 
   function setDrawer(open) {
-    var drawerOpen = !!open;
     var d = navDrawer();
-    if (d) {
-      if (drawerOpen) d.open();
-      else d.close();
-    }
-    document.body.classList.toggle('mdui-drawer-body-left', drawerOpen && isWide());
+    if (!d) return;
+    if (open) d.open();
+    else d.close();
+    syncBodyOffset();
   }
 
   function toggleDrawer() {
-    // 读 DOM 的真实状态再取反，避免「以为开着其实关着」导致第一次点击无效
-    setDrawer(!drawerIsOpen());
+    var d = navDrawer();
+    if (!d) return;
+    // 原生 toggle：mdui 自己读当前状态再切换，不存在镜像不同步的问题
+    d.toggle();
+    syncBodyOffset();
   }
 
-  /* ---------------------------------------------------------------- 登录页 */
-  function showLogin(message) {
-    state.loginRequired = true;
-    var box = $('login');
-    if (box) box.hidden = false;
-    if (message) $('loginErr').textContent = message;
-  }
-
-  function hideLogin() {
-    state.loginRequired = false;
-    var box = $('login');
-    if (box) box.hidden = true;
-    $('loginErr').textContent = '';
-  }
-
-  function doLogin() {
-    var username = $('loginUser').value.trim();
-    var password = $('loginPass').value;
-    if (!username || !password) {
-      $('loginErr').textContent = '请填写登录名与口令';
-      return;
-    }
-    var btn = $('loginBtn');
-    btn.disabled = true;
-    $('loginErr').textContent = '';
-    api('/api/admin/login', {
-      method: 'POST',
-      body: JSON.stringify({ username: username, password: password }),
-    }).then(function (d) {
-      var t = d && d.token;
-      var raw = typeof t === 'string' ? t : pick(t, ['access_token', 'token'], '');
-      if (!raw) throw new Error('登录响应缺少令牌');
-      setToken(raw);
-      state.admin = (d && d.admin) || null;
-      $('loginPass').value = '';
-      hideLogin();
-      enterApp();
-    }).catch(function (err) {
-      $('loginErr').textContent = err.message;
-    }).then(function () {
-      btn.disabled = false;
-    });
-  }
-
+  /* ---------------------------------------------------------------- 登录 / 退出 */
+  /* 登录已经搬到独立的 /admin/login 页面，凭证放在 HttpOnly Cookie 里，
+     面板本身不再有登录框。原先这里的 showLogin / hideLogin / doLogin 会去操作
+     #login / #loginErr / #loginUser 这些面板里已经不存在的元素，
+     于是面板一加载就抛 "Cannot set properties of null (setting 'textContent')"。 */
   function doLogout() {
     ask('确认退出当前管理员账号？', '退出登录').then(function (ok) {
       if (!ok) return;
-      setToken('');
-      state.admin = null;
-      showLogin('已退出登录');
+      // 会话在服务端，必须走 /admin/logout 由服务端撤销并清 Cookie
+      window.location.href = '/admin/logout';
     });
   }
 
@@ -329,7 +292,7 @@
         break;
       }
     }
-    $('pageTitle').textContent = label;
+    if ($('pageTitle')) $('pageTitle').textContent = label;
     state.page = key;
     if (window.history && window.history.replaceState) {
       window.history.replaceState(null, '', '#' + key);
@@ -401,7 +364,8 @@
     return api(qs).then(function (d) {
       var rows = d.items || [];
       state.accounts[role] = rows;
-      $(isRetail ? 'retailCount' : 'instCount').textContent =
+      var cntEl = $(isRetail ? 'retailCount' : 'instCount');
+      if (cntEl) cntEl.textContent =
         '共 ' + (d.total === undefined ? rows.length : d.total) + ' 个账户';
 
       if (!rows.length) {
@@ -452,7 +416,7 @@
     $('acCash').value = role === 'institution' ? '50000000' : '1000000';
     $('acPassword').value = '';
     $('acRole').value = role;
-    $('acTitle').textContent = role === 'institution' ? '新建机构账户' : '新建零售账户';
+    if ($('acTitle')) $('acTitle').textContent = role === 'institution' ? '新建机构账户' : '新建零售账户';
     openDlg('dlgAccount');
   }
 
@@ -477,7 +441,7 @@
 
   function openAdjustDialog(id, username) {
     state.adjustTarget = id;
-    $('ajWho').textContent = '账户：' + username;
+    if ($('ajWho')) $('ajWho').textContent = '账户：' + username;
     $('ajAmount').value = '';
     $('ajRemark').value = '';
     openDlg('dlgAdjust');
@@ -579,7 +543,7 @@
     return api('/api/admin/stocks').then(function (d) {
       var rows = d.items || [];
       state.stocks = rows;
-      $('stockCount').textContent = '共 ' + rows.length + ' 只标的';
+      if ($('stockCount')) $('stockCount').textContent = '共 ' + rows.length + ' 只标的';
       if (!rows.length) {
         body.innerHTML = emptyRow(10, '库中暂无标的，去「数据初始化」注入默认标的');
         return;
@@ -637,7 +601,7 @@
     state.editingStock = code || null;
     if (code) {
       var s = state.stocks.filter(function (x) { return x.code === code; })[0] || {};
-      $('stTitle').textContent = '编辑标的 ' + code;
+      if ($('stTitle')) $('stTitle').textContent = '编辑标的 ' + code;
       $('stCode').value = s.code || code;
       $('stCode').readOnly = true;
       $('stName').value = s.name || '';
@@ -646,7 +610,7 @@
       $('stPrice').value = s.prev_close || '';
       $('stFloat').value = s.float_shares || 500000000;
     } else {
-      $('stTitle').textContent = '新增标的';
+      if ($('stTitle')) $('stTitle').textContent = '新增标的';
       $('stCode').value = '';
       $('stCode').readOnly = false;
       $('stName').value = '';
@@ -697,7 +661,7 @@
     $('engineKpis').innerHTML = '<div class="app-loading">加载中…</div>';
     return api('/api/admin/engine').then(function (d) {
       var s = d.session || {};
-      $('toggleEngine').textContent = d.enabled ? '关闭引擎' : '开启引擎';
+      if ($('toggleEngine')) $('toggleEngine').textContent = d.enabled ? '关闭引擎' : '开启引擎';
       $('toggleEngine').dataset.enabled = d.enabled ? '1' : '0';
       $('engineKpis').innerHTML = [
         kpi('引擎开关', d.enabled ? '已开启' : '已关闭'),
@@ -785,7 +749,7 @@
     return api('/api/admin/boards').then(function (d) {
       var rows = d.items || [];
       state.boards = rows;
-      $('boardCount').textContent = '共 ' + rows.length + ' 个板块';
+      if ($('boardCount')) $('boardCount').textContent = '共 ' + rows.length + ' 个板块';
       if (!rows.length) {
         body.innerHTML = emptyRow(8, '暂无板块');
         return;
@@ -816,7 +780,7 @@
       b = state.boards.filter(function (x) { return x.name === name; })[0] || {};
     }
     state.editingBoard = name || null;
-    $('bdTitle').textContent = name ? '编辑板块 ' + name : '新增板块';
+    if ($('bdTitle')) $('bdTitle').textContent = name ? '编辑板块 ' + name : '新增板块';
     $('bdName').value = b ? (b.name || name) : '';
     $('bdName').readOnly = !!name;
     $('bdLimit').value = b && b.limit_pct !== undefined
@@ -878,7 +842,7 @@
     return api('/api/admin/industries').then(function (d) {
       var rows = d.items || [];
       state.industries = rows;
-      $('industryCount').textContent = '共 ' + rows.length + ' 个行业';
+      if ($('industryCount')) $('industryCount').textContent = '共 ' + rows.length + ' 个行业';
       if (!rows.length) {
         body.innerHTML = emptyRow(5, '暂无行业');
         return;
@@ -906,7 +870,7 @@
       it = state.industries.filter(function (x) { return x.name === name; })[0] || {};
     }
     state.editingIndustry = name || null;
-    $('inTitle').textContent = name ? '编辑行业 ' + name : '新增行业';
+    if ($('inTitle')) $('inTitle').textContent = name ? '编辑行业 ' + name : '新增行业';
     $('inName').value = it ? (it.name || name) : '';
     $('inName').readOnly = !!name;
     $('inSort').value = it && it.sort !== undefined ? it.sort : 0;
@@ -1141,13 +1105,6 @@
     });
 
     $('logoutBtn').addEventListener('click', doLogout);
-    $('loginBtn').addEventListener('click', doLogin);
-    $('loginPass').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') doLogin();
-    });
-    $('loginUser').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') $('loginPass').focus();
-    });
 
     /* 总览 */
     $('refreshOverview').addEventListener('click', loadOverview);
@@ -1265,10 +1222,10 @@
     if (!state.admin) {
       api('/api/admin/me').then(function (d) {
         state.admin = d.admin || null;
-        if (state.admin) $('who').textContent = state.admin.display_name || state.admin.username;
+        if (state.admin && $('who')) $('who').textContent = state.admin.display_name || state.admin.username;
       }).catch(function () { /* 401 已由 api() 统一处理 */ });
     } else {
-      $('who').textContent = state.admin.display_name || state.admin.username;
+      if ($('who')) $('who').textContent = state.admin.display_name || state.admin.username;
     }
 
     setDrawer(isWide());
@@ -1279,12 +1236,9 @@
 
   function boot() {
     bind();
-    if (token()) {
-      hideLogin();
-      enterApp();
-    } else {
-      showLogin('');
-    }
+    // 是否已登录由服务端判定：/admin 未登录会 302 到 /admin/login，
+    // 能走到这里就说明会话有效，前端不必（也不该）再判一次 token。
+    enterApp();
 
     /* 窄屏切成宽屏时把抽屉展开，反之收起，避免半开状态 */
     var wasWide = isWide();

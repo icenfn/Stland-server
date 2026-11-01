@@ -1,42 +1,41 @@
-/* 独立登录页脚本：只负责提交与跳转，不复用后台面板的 app.js */
+/* 独立登录页脚本：提交凭据并跳转后台。
+   登录凭证由服务端写入 HttpOnly Cookie，前端不再保存 token，
+   避免 XSS 直接读到管理凭证。 */
 (function () {
   var form = document.getElementById('loginForm');
   var err = document.getElementById('loginErr');
   var btn = document.getElementById('loginBtn');
+  if (!form) return;
 
   form.addEventListener('submit', function (ev) {
     ev.preventDefault();
-    err.textContent = '';
-    btn.disabled = true;
-
-    var payload = {
-      username: document.getElementById('loginUser').value.trim(),
-      password: document.getElementById('loginPass').value,
-    };
+    if (err) err.textContent = '';
+    if (btn) btn.disabled = true;
 
     fetch('/api/admin/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        username: (document.getElementById('loginUser') || {}).value || '',
+        password: (document.getElementById('loginPass') || {}).value || '',
+      }),
     })
       .then(function (r) {
         return r.json().then(function (d) {
-          if (!r.ok) throw new Error(d.detail || '登录失败');
+          if (!r.ok) {
+            var detail = d && d.detail;
+            throw new Error((detail && detail.message) || (typeof detail === 'string' ? detail : '') || '登录失败');
+          }
           return d;
         });
       })
-      .then(function (d) {
-        // token 可能是字符串，也可能是 {access_token}，两种都兼容
-        var tok = typeof d.token === 'string' ? d.token : (d.access_token || (d.token && d.token.access_token) || '');
-        if (!tok) throw new Error('未拿到登录凭证');
-        localStorage.setItem('stland_admin_token', tok);
+      .then(function () {
         location.href = '/admin';
       })
       .catch(function (e) {
-        err.textContent = e.message || '登录失败';
-      })
-      .then(function () {
-        btn.disabled = false;
+        if (err) err.textContent = e.message || '登录失败';
+        if (btn) btn.disabled = false;
       });
   });
 })();

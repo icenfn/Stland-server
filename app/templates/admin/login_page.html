@@ -5,26 +5,50 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>登录 · Stland 管理后台</title>
   <link rel="stylesheet" href="/static/vendor/mdui/css/mdui.min.css" />
-  <link rel="stylesheet" href="/static/admin/login.css" />
+  <style>
+    /* 仅做「居中 + 背景」的版式微调，组件样式全部交给 mdui */
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: #f2f3f5;
+    }
+    .login-card { width: min(380px, calc(100vw - 40px)); }
+    .login-err {
+      min-height: 18px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: #e8383d;
+    }
+  </style>
 </head>
-<body class="login-body">
-  <form class="login-card" id="loginForm" autocomplete="on">
-    <div class="login-brand">Stland</div>
-    <div class="login-sub">管理后台</div>
+<body>
+  <form class="mdui-card login-card mdui-shadow-6" id="loginForm" autocomplete="on">
+    <div class="mdui-card-primary">
+      <div class="mdui-card-primary-title">Stland</div>
+      <div class="mdui-card-primary-subtitle">管理后台登录</div>
+    </div>
 
-    <label class="login-field">
-      <span>账号</span>
-      <input id="loginUser" type="text" autocomplete="username" required />
-    </label>
-    <label class="login-field">
-      <span>密码</span>
-      <input id="loginPass" type="password" autocomplete="current-password" required />
-    </label>
+    <div class="mdui-card-content">
+      <div class="mdui-textfield mdui-textfield-floating-label">
+        <label class="mdui-textfield-label" for="loginUser">账号</label>
+        <input class="mdui-textfield-input" id="loginUser" type="text"
+               autocomplete="username" required />
+      </div>
 
-    <div class="login-err" id="loginErr"></div>
-    <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" type="submit" id="loginBtn">
-      登录
-    </button>
+      <div class="mdui-textfield mdui-textfield-floating-label">
+        <label class="mdui-textfield-label" for="loginPass">密码</label>
+        <input class="mdui-textfield-input" id="loginPass" type="password"
+               autocomplete="current-password" required />
+      </div>
+
+      <div class="login-err" id="loginErr"></div>
+
+      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme mdui-btn-block"
+              type="submit" id="loginBtn">登录</button>
+    </div>
   </form>
 
   <script src="/static/vendor/mdui/js/mdui.min.js"></script>

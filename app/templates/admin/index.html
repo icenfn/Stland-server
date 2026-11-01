@@ -22,7 +22,14 @@
 {# ---------------------------------------------------------------- 侧边栏 #}
 {# 用 a 而不是 button：button 自带 buttonface 背景、2px outset 边框与 text-align:center，
    会把 .mdui-list-item 的 flex 布局和图标位置全部打乱 —— 之前图标跑偏就是这个原因 #}
-<div class="mdui-drawer mdui-drawer-left app-drawer" id="nav">
+{# mdui-drawer-close 必须显式写上。
+   mdui 1.0.2 的 Drawer 构造函数是：有 mdui-drawer-close → closed；否则
+   「有 mdui-drawer-open 或 isDesktop()」→ opened。也就是说宽屏下它默认把内部状态
+   记成 opened，但元素上没有 mdui-drawer-open 类，CSS 仍把抽屉放在屏幕外。
+   于是第一次点按钮 toggle() 是在「关闭」一个本来就看不见的抽屉，第二次才真正打开
+   —— 这就是必须点两次才有反应的原因。写上 mdui-drawer-close 后初始状态明确为
+   closed，且 mdui 的 resize 回调也不会再把宽屏强制设成 opened。 #}
+<div class="mdui-drawer mdui-drawer-close mdui-drawer-left app-drawer" id="nav">
   <div class="app-brand">
     <div class="app-brand-mark">S</div>
     <div class="app-brand-text">
