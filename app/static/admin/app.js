@@ -1062,6 +1062,8 @@
   function bindCfgInputs(host, group) {
     // 内置时段模板按钮：把对应预设的 JSON 填进 textarea，并标记为已修改，
     // 让运营能直接保存，也还能在填入后继续手改。
+    // 用 dispatchEvent 触发一次 input，让下面统一注册的 mark 处理器接管
+    // 「记入待保存值 + 高亮」这件事，按钮自己不再重复维护状态。
     var slotsEl = host.querySelector('[data-cfg="session_slots"]');
     host.querySelectorAll('[data-fill-preset]').forEach(function (btn) {
       btn.addEventListener('click', function () {
@@ -1071,12 +1073,6 @@
         if (!hit) return;
         slotsEl.value = hit.json;
         slotsEl.dispatchEvent(new Event('input', { bubbles: true }));
-        var box = slotsEl.closest('.app-cfg');
-        if (box) {
-          box.classList.remove('app-cfg-dirty');
-          // 触发一次 input 会打上 dirty 标记，这里保持标记以便保存
-          box.classList.add('app-cfg-dirty');
-        }
       });
     });
     host.querySelectorAll('[data-cfg]').forEach(function (el) {
