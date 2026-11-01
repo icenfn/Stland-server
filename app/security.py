@@ -7,15 +7,8 @@
   canonical 由「方法 / 路径 / 时间戳 / 随机数 / 请求体摘要 / 用户标识」按行拼接，
   防止抓包篡改与重放；时间窗口内的随机数只允许使用一次。
 
-关于 JWT 为什么改用 PyJWT：
-    最初这里是一段手写的 HS256 实现 —— base64url 编解码、签名拼接、
-    手动比对 exp / iss。它能用，但「自己实现密码学协议」是典型的
-    长期维护负担：算法轮换（改 RS256）、密钥轮换（kid 头）、
-    clock skew 容忍、以及各种边界（空 payload、非法 base64、alg 篡改
-    即 alg=none 攻击）都要自己逐个想到并写测试。
-    PyJWT 是这条链路上事实标准，上述问题它都已处理并有测试覆盖，
-    且产出的 token 格式与原来的完全一致（HS256 + 标准 claims），
-    因此既有未过期令牌在升级后依然有效，不需要强制用户重新登录。
+JWT 交给 PyJWT：算法轮换、kid、clock skew、alg=none 等边界由其处理并测试，
+自研编解码只会带来长期维护负担。token 为 HS256 + 标准 claims。
 """
 from __future__ import annotations
 

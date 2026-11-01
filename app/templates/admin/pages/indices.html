@@ -1,0 +1,32 @@
+<section class="app-page" id="page-indices">
+  <div class="app-page-head">
+    <div class="app-page-title">指数管理</div>
+    <div class="app-page-desc" id="indexCount">--</div>
+    <div class="app-toolbar">
+      <button class="mdui-btn mdui-ripple" id="refreshIndices">刷新</button>
+    </div>
+  </div>
+
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
+      <div class="app-card-title">指数列表</div>
+      <div class="app-card-sub">由成分股等权合成，只读；没有成分股时点位显示「--」</div>
+    </div>
+    <div class="mdui-table-fluid">
+      <table class="mdui-table">
+        <thead>
+          <tr>
+            <th>代码</th>
+            <th>名称</th>
+            <th class="num">点位</th>
+            <th class="num">涨跌幅</th>
+            <th class="num">成分数</th>
+            <th class="num">上涨</th>
+            <th class="num">下跌</th>
+          </tr>
+        </thead>
+        <tbody id="indicesBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>

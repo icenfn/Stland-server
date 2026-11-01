@@ -92,12 +92,8 @@ async def unhandled(request: Request, exc: Exception):  # pragma: no cover
     )
 
 
-# 运营后台：Jinja2 服务端渲染
-#
-# 为什么从「一个 1196 行的静态 HTML」改成模板：
-#   十个分区挤在同一个文件里，改一页要在上千行里找锚点，还容易误伤别的分区；
-#   拆成 base + 每页一个模板之后，分区边界由文件系统体现，
-#   导航清单只写一处，增删分区不必再同步 HTML 与 JS 两个地方。
+# 运营后台：Jinja2 服务端渲染。
+# base 模板 + 每页一个子模板，分区边界由文件体现；导航清单在 ADMIN_NAV 单点维护。
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES))
 
@@ -120,7 +116,15 @@ ADMIN_NAV = [
             {"key": "admins", "label": "管理员", "icon": "supervisor_account"},
         ],
     },
-    {"key": "stocks", "label": "标的与指数", "icon": "show_chart"},
+    {
+        "key": "market_data",
+        "label": "行情数据",
+        "icon": "show_chart",
+        "children": [
+            {"key": "stocks", "label": "标的管理", "icon": "list"},
+            {"key": "indices", "label": "指数管理", "icon": "timeline"},
+        ],
+    },
     {"key": "boards", "label": "板块管理", "icon": "view_column"},
     {"key": "industries", "label": "行业管理", "icon": "category"},
     {
@@ -146,10 +150,8 @@ if _STATIC.is_dir():
 # ---------------------------------------------------------------------------
 # 管理后台登录态
 # ---------------------------------------------------------------------------
-# 会话表与 Cookie 读写都收敛在 services/admin_session.py：
-# 那里是「登录写会话」与「鉴权读会话」唯一的共同状态源。
-# 之前这部分逻辑只写在 main.py，而 admin_user 依赖仍只认 Bearer 令牌，
-# 于是登录成功也进不去面板（每个接口都回「缺少访问令牌」）。
+# 会话表与 Cookie 读写收敛在 services/admin_session.py，
+# 是「登录写会话」与「鉴权读会话」唯一的共同状态源。
 
 
 def _admin_logged_in(request: Request) -> bool:

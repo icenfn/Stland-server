@@ -23,7 +23,7 @@
     editingStock: null,
     editingBoard: null,
     editingIndustry: null,
-    adjustTarget: null,
+    editTarget: null,
     loginRequired: false,
   };
 
@@ -261,7 +261,8 @@
     retail: function () { return loadAccounts('retail'); },
     institution: function () { return loadAccounts('institution'); },
     admins: loadAdmins,
-    stocks: function () { return Promise.all([loadStocks(), loadIndices()]); },
+    stocks: loadStocks,
+    indices: loadIndices,
     // 引擎页只管运行状态与重置；引擎参数（间隔/波动/漂移/开关）已归入模拟器配置
     engine: loadEngine,
     simcfg: loadSimCfg,
@@ -376,7 +377,7 @@
       }
 
       body.innerHTML = rows.map(function (u) {
-        var ops = rowBtn('调资金', 'data-act="adjust" data-id="' + u.id + '"') +
+        var ops = rowBtn('编辑', 'data-act="editaccount" data-id="' + u.id + '"') +
           rowBtn(u.status === 'active' ? '冻结' : '启用',
             'data-act="status" data-id="' + u.id + '" data-status="' + esc(u.status) + '"') +
           rowBtn('删除', 'data-act="del" data-id="' + u.id + '" data-name="' + esc(u.username) + '"', true);
@@ -441,27 +442,86 @@
       .catch(function (e) { notify(e.message); });
   }
 
-  function openAdjustDialog(id, username) {
-    state.adjustTarget = id;
-    if ($('ajWho')) $('ajWho').textContent = '账户：' + username;
-    $('ajAmount').value = '';
-    $('ajRemark').value = '';
-    openDlg('dlgAdjust');
+  /** 打开「编辑账户」：回填当前值，提交时只发真正改过的字段 */
+  function openAccountEdit(id) {
+    var role = state.page === 'institution' ? 'institution' : 'retail';
+    var rows = state.accounts[role] || [];
+    var u = rows.filter(function (x) { return String(x.id) === String(id); })[0];
+    if (!u) { notify('账户数据已过期，请刷新后重试'); return; }
+    state.editTarget = u;
+
+    var isInst = u.role === 'institution';
+    $('aeTitle').textContent = '编辑账户 ' + u.username;
+    $('aeWho').textContent = '账户：' + u.username + '（' + (isInst ? '机构' : '零售') + '）';
+    $('aeDisplay').value = u.display_name || '';
+    $('aeStatus').value = u.status || 'active';
+    $('aeRisk').value = String(u.risk_level == null ? 0 : u.risk_level);
+    $('aeCredit').value = u.credit_limit == null ? '0' : String(u.credit_limit);
+    $('aeRate').value = u.commission_rate == null ? '' : String(u.commission_rate);
+    $('aeMin').value = u.commission_min == null ? '' : String(u.commission_min);
+    $('aeCash').value = '';
+    $('aePassword').value = '';
+    // 风险偏好只对零售有意义，授信额度只对机构有意义，各自隐藏不相关的项
+    $('aeRiskField').style.display = isInst ? 'none' : '';
+    $('aeCreditField').style.display = isInst ? '' : 'none';
+    openDlg('dlgAccountEdit');
   }
 
-  function submitAdjust() {
-    var amount = Number($('ajAmount').value);
-    if (!state.adjustTarget || !isFinite(amount) || amount === 0) {
-      notify('请填写非零金额');
-      return;
+  function submitAccountEdit() {
+    var u = state.editTarget;
+    if (!u) { notify('请重新选择账户'); return; }
+    var payload = {};
+
+    var display = $('aeDisplay').value.trim();
+    if (display !== (u.display_name || '')) payload.display_name = display;
+
+    var status = $('aeStatus').value;
+    if (status !== u.status) payload.status = status;
+
+    if (u.role === 'institution') {
+      var credit = Number($('aeCredit').value || 0);
+      if (credit !== Number(u.credit_limit || 0)) payload.credit_limit = credit;
+    } else {
+      var risk = Number($('aeRisk').value);
+      if (risk !== Number(u.risk_level == null ? 0 : u.risk_level)) payload.risk_level = risk;
     }
-    api('/api/admin/accounts/' + state.adjustTarget + '/adjust', {
-      method: 'POST',
-      body: JSON.stringify({ amount: amount, remark: $('ajRemark').value.trim() }),
+
+    // 留空 = 跟随角色默认（null），与「填 0」是两种不同语义，必须区分开
+    var rateRaw = $('aeRate').value.trim();
+    var rate = rateRaw === '' ? null : Number(rateRaw);
+    if (rate !== (u.commission_rate == null ? null : Number(u.commission_rate))) {
+      payload.commission_rate = rate;
+    }
+    var minRaw = $('aeMin').value.trim();
+    var cmin = minRaw === '' ? null : Number(minRaw);
+    if (cmin !== (u.commission_min == null ? null : Number(u.commission_min))) {
+      payload.commission_min = cmin;
+    }
+
+    var cashRaw = $('aeCash').value.trim();
+    var delta = cashRaw === '' ? 0 : Number(cashRaw);
+    if (!isFinite(delta)) { notify('资金变动必须是数字'); return; }
+    if (delta !== 0) {
+      payload.cash_delta = delta;
+      payload.remark = '管理端编辑账户时调整资金';
+    }
+
+    var pwd = $('aePassword').value;
+    if (pwd) {
+      if (pwd.length < 6) { notify('口令至少 6 位'); return; }
+      payload.password = pwd;
+    }
+
+    if (!Object.keys(payload).length) { notify('没有需要保存的改动'); return; }
+
+    api('/api/admin/accounts/' + u.id, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
     }).then(function (d) {
-      closeDlg('dlgAdjust');
-      notify('资金已调整，可用资金 ' + num(d.cash));
-      loadAccounts(state.page === 'institution' ? 'institution' : 'retail');
+      closeDlg('dlgAccountEdit');
+      var changed = (d && d.changed && d.changed.length) ? '：' + d.changed.join('、') : '';
+      notify('已保存' + changed);
+      loadAccounts(u.role === 'institution' ? 'institution' : 'retail');
     }).catch(function (e) { notify(e.message); });
   }
 
@@ -576,26 +636,31 @@
 
   function loadIndices() {
     var body = $('indicesBody');
-    body.innerHTML = emptyRow(4, '加载中…');
+    body.innerHTML = emptyRow(7, '加载中…');
     return api('/api/admin/indices').then(function (d) {
       var rows = d.items || [];
+      if ($('indexCount')) $('indexCount').textContent = '共 ' + rows.length + ' 个指数';
       if (!rows.length) {
-        body.innerHTML = emptyRow(4, '暂无指数');
+        body.innerHTML = emptyRow(7, '暂无指数');
         return;
       }
       body.innerHTML = rows.map(function (i) {
-        var point = pick(i, ['point', 'close', 'value', 'price'], null);
-        var chg = pick(i, ['change_pct', 'pct'], null);
-        var cls = Number(chg) > 0 ? 'is-pos' : (Number(chg) < 0 ? 'is-neg' : '');
+        // 指数没有成分股时点位为空（has_data=false），必须显示「--」而不是 0
+        var has = i.has_data !== false;
+        var chg = i.change_pct;
+        var cls = !has || chg == null ? '' : (chg > 0 ? 'is-pos' : (chg < 0 ? 'is-neg' : ''));
         return '<tr>' +
           '<td>' + esc(i.code) + '</td>' +
           '<td>' + esc(i.name) + '</td>' +
-          '<td class="num">' + num(point) + '</td>' +
-          '<td class="num ' + cls + '">' + pct(chg) + '</td>' +
+          '<td class="num">' + (has ? num(i.price) : '--') + '</td>' +
+          '<td class="num ' + cls + '">' + (has ? pct(chg) : '--') + '</td>' +
+          '<td class="num">' + int(i.members) + '</td>' +
+          '<td class="num is-pos">' + int(i.up) + '</td>' +
+          '<td class="num is-neg">' + int(i.down) + '</td>' +
           '</tr>';
       }).join('');
     }).catch(function (e) {
-      body.innerHTML = emptyRow(4, e.message);
+      body.innerHTML = emptyRow(7, e.message);
     });
   }
 
@@ -1167,8 +1232,8 @@
 
     $('acCancel').addEventListener('click', function () { closeDlg('dlgAccount'); });
     $('acSubmit').addEventListener('click', submitAccount);
-    $('ajCancel').addEventListener('click', function () { closeDlg('dlgAdjust'); });
-    $('ajSubmit').addEventListener('click', submitAdjust);
+    $('aeCancel').addEventListener('click', function () { closeDlg('dlgAccountEdit'); });
+    $('aeSubmit').addEventListener('click', submitAccountEdit);
 
     /* 管理员 */
     $('refreshAdmins').addEventListener('click', loadAdmins);
@@ -1182,10 +1247,8 @@
     $('adSubmit').addEventListener('click', submitAdmin);
 
     /* 标的 */
-    $('refreshStocks').addEventListener('click', function () {
-      loadStocks();
-      loadIndices();
-    });
+    $('refreshStocks').addEventListener('click', loadStocks);
+    $('refreshIndices').addEventListener('click', loadIndices);
     $('addStock').addEventListener('click', function () { openStockDialog(null); });
     $('stCancel').addEventListener('click', function () { closeDlg('dlgStock'); });
     $('stSubmit').addEventListener('click', submitStock);
@@ -1237,7 +1300,7 @@
       var btn = e.target.closest ? e.target.closest('.row-btn') : null;
       if (!btn) return;
       var act = btn.dataset.act;
-      if (act === 'adjust') openAdjustDialog(btn.dataset.id, btn.dataset.name || btn.dataset.id);
+      if (act === 'editaccount') openAccountEdit(btn.dataset.id);
       else if (act === 'status') toggleAccountStatus(btn.dataset.id, btn.dataset.status);
       else if (act === 'del') deleteAccount(btn.dataset.id, btn.dataset.name);
       else if (act === 'editstock') openStockDialog(btn.dataset.code);

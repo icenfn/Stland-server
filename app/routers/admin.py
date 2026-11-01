@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import time
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
@@ -326,6 +327,8 @@ def list_accounts(
                 "total_asset": round(u.total_asset, 2),
                 "realized_pnl": round(u.realized_pnl, 2),
                 "credit_limit": round(u.credit_limit, 2),
+                "commission_rate": u.commission_rate,
+                "commission_min": u.commission_min,
                 "risk_level": u.risk_level,
                 "risk_assessed": u.risk_assessed_at > 0,
                 "positions": pos_count,
@@ -421,6 +424,121 @@ def update_account_status(
     session.add(target)
     session.commit()
     return {"ok": True, "status": target.status.value}
+
+
+class AccountEditIn(BaseModel):
+    """编辑交易账户：一次提交可改多项，只处理显式传入的字段。
+
+    为什么用「显式传入才改」而不是整行覆盖：管理端表单通常只回填一部分字段，
+    整行覆盖会把没展示的字段（如 commission_rate）当成 null 悄悄清空。
+    这里靠 `model_dump(exclude_unset=True)` 区分「没传」与「传了 null」，
+    传 null 才代表「改回跟随角色默认」。
+    """
+
+    display_name: Optional[str] = Field(default=None, max_length=40)
+    status: Optional[str] = Field(default=None, max_length=16)
+    risk_level: Optional[int] = Field(default=None, ge=0, le=3)
+    credit_limit: Optional[float] = Field(default=None, ge=0)
+    commission_rate: Optional[float] = Field(default=None, ge=0, le=0.01)
+    commission_min: Optional[float] = Field(default=None, ge=0, le=1000)
+    password: Optional[str] = Field(default=None, min_length=6, max_length=64)
+    cash_delta: Optional[float] = Field(
+        default=None, description="可选：同时调整可用资金，正数入金、负数出金"
+    )
+    remark: str = Field(default="", max_length=80)
+
+
+@router.put("/accounts/{user_id}")
+def edit_account(
+    user_id: int,
+    payload: AccountEditIn,
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """编辑交易账户资料，可顺带调整资金。
+
+    `role` 与 `username` 不在此处修改：前者会影响授信、费率默认与撮合口径，
+    后者是登录凭据与所有流水的关联键，都不适合在「编辑资料」里顺手改。
+    资金调整仍写一条 `adjust` 流水，保持与旧「调资金」一致的审计口径。
+    """
+    target = session.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, detail={"code": "USER_NOT_FOUND", "message": "账户不存在"})
+
+    data = payload.model_dump(exclude_unset=True)
+    changed: list[str] = []
+
+    if "display_name" in data:
+        target.display_name = (data["display_name"] or "").strip() or target.username
+        changed.append("display_name")
+
+    if "status" in data and data["status"] is not None:
+        try:
+            target.status = AccountStatus(data["status"])
+        except ValueError:
+            raise HTTPException(
+                400,
+                detail={"code": "BAD_STATUS", "message": "状态仅支持 active/frozen/closed"},
+            )
+        changed.append("status")
+
+    if "risk_level" in data and data["risk_level"] is not None:
+        target.risk_level = int(data["risk_level"])
+        # 0 表示「从未测评」，此时清掉测评时间；改为具体等级则记为刚测评过。
+        target.risk_assessed_at = 0.0 if target.risk_level == 0 else time.time()
+        changed.append("risk_level")
+
+    if "credit_limit" in data:
+        # 授信只对机构有意义；零售账户恒为 0，避免出现「零售也能融资」的脏数据。
+        target.credit_limit = (
+            0.0 if target.role != Role.INSTITUTION else round(float(data["credit_limit"] or 0.0), 2)
+        )
+        changed.append("credit_limit")
+
+    for key in ("commission_rate", "commission_min"):
+        if key in data:
+            val = data[key]
+            setattr(target, key, None if val is None else round(float(val), 6))
+            changed.append(key)
+
+    if "password" in data and data["password"]:
+        target.password_hash = hash_password(data["password"])
+        target.fail_count = 0
+        target.locked_until = 0.0
+        changed.append("password")
+
+    if data.get("cash_delta"):
+        before = target.cash
+        after = round(before + float(data["cash_delta"]), 4)
+        if after < 0:
+            raise HTTPException(
+                400, detail={"code": "INVALID_AMOUNT", "message": "调整后可用资金不能为负"}
+            )
+        target.cash = after
+        session.add(
+            CashFlow(
+                user_id=target.id or 0,
+                biz_type="adjust",
+                amount=round(float(data["cash_delta"]), 4),
+                balance_before=round(before, 4),
+                balance_after=after,
+                remark=payload.remark or "管理端资金调整",
+            )
+        )
+        changed.append("cash")
+
+    target.total_asset = round(target.cash + target.frozen_cash + target.market_value, 4)
+    target.updated_at = time.time()
+    session.add(target)
+    session.commit()
+    session.refresh(target)
+    return {
+        "ok": True,
+        "id": target.id,
+        "changed": changed,
+        "cash": round(target.cash, 2),
+        "total_asset": round(target.total_asset, 2),
+    }
 
 
 class AdjustIn(BaseModel):

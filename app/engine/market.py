@@ -200,11 +200,15 @@ class MarketEngine:
         self._lock = threading.RLock()
         self._states: dict[str, SecurityState] = {}
         self._index_minutes: deque[tuple[int, float]] = deque(maxlen=1440)
-        self._index_prev_close: float = 3000.0
-        self._index_value: float = 3000.0
-        self._index_open: float = 3000.0
-        self._index_high: float = 3000.0
-        self._index_low: float = 3000.0
+        # 3000 只是「成分等权比值 → 点位」的缩放基准，不是当前点位。
+        # 真正生效的指数点位由引擎 index.py 按成分合成；这里的旧聚合值仅在
+        # 有成分注册时才有意义，无成分时 index_quote() 会明确返回无数据。
+        self._index_base: float = 3000.0
+        self._index_prev_close: float = self._index_base
+        self._index_value: float = self._index_base
+        self._index_open: float = self._index_base
+        self._index_high: float = self._index_base
+        self._index_low: float = self._index_base
         self._market_ret: float = 0.0
         self._rng = random.Random(20260101)
         self._tick_count = 0
@@ -609,7 +613,26 @@ class MarketEngine:
         ]
 
     def index_quote(self) -> dict:
+        """引擎内的旧综合指数快照（兜底用；前端主口径见 `engine/index.py`）。
+
+        没有注册任何标的时**不存在点位**：返回 `has_data=False` 与 `None`，
+        避免空库/未注入数据时首页显示一个凭空出现的点位。
+        """
         with self._lock:
+            if not self._states:
+                return {
+                    "code": "SL000001",
+                    "name": "股岛综合指数",
+                    "price": None,
+                    "prev_close": None,
+                    "open": None,
+                    "high": None,
+                    "low": None,
+                    "change": None,
+                    "change_pct": None,
+                    "has_data": False,
+                    "ts": int(time.time() * 1000),
+                }
             change = round(self._index_value - self._index_prev_close, 2)
             return {
                 "code": "SL000001",
@@ -621,6 +644,7 @@ class MarketEngine:
                 "low": self._index_low,
                 "change": change,
                 "change_pct": round(change / self._index_prev_close * 100, 2) if self._index_prev_close else 0.0,
+                "has_data": True,
                 "ts": int(time.time() * 1000),
             }
 

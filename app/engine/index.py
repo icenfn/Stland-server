@@ -1,19 +1,15 @@
-"""指数计算：让指数和股票一样有代码、能查详情。
+"""指数计算：让指数和个股一样有代码、能查详情。
 
-为什么要单独一层
-------------
-原来的实现只有一个「股岛综合指数」，硬编码 `SL000001`，只存在于首页聚合里，
-既不能选中、也没有详情页。但产品上指数就是「一篮子标的的加权价格」，
-和个股应当是同一类可浏览对象 —— 有代码、有涨跌幅、能点进去看分时与 K 线。
+指数清单里每个指数：
+* 有稳定的 8 位代码（`SL` 前缀 + 6 位数字），与个股代码进入同一套搜索与路由；
+* 由成分股按**等权**归一化价格合成（`Σ(price_i / prev_close_i) / n × 基准点位`）。
+  等权而非市值加权：模拟盘标的的股本参数差异极大，市值加权会让单只标的过度主导；
+* 分时/K 线由成分股分钟线同法合成，不额外留存时序数据。
 
-所以这里定义一张指数清单，每个指数：
-* 有稳定的 8 位代码（`SL` 前缀 + 6 位数字），与个股代码同样进入搜索与路由；
-* 由若干成分股按**等权**归一化价格合成（`Σ(price_i / prev_close_i) / n × 基准点位`）。
-  等权而非市值加权，是因为模拟盘的流通股本参数差异极大，
-  市值加权会让一只标的的主导作用过强，指数看起来不像「板块整体」；
-* 分时/K 线由成分股的分钟线同法合成，无需额外留存时序数据。
-
-基准点位取整千附近的常数，读起来像真实指数，也便于肉眼估计涨跌幅。
+**没有成分股就没有指数。** 基准点位只是合成时的缩放系数，不是「当前的指数点位」。
+空库时若拿基准点位兜底，后台还没注入任何标的前端就会显示一个像模像样的点位，
+看起来像行情已经跑起来了 —— 所以此处的约定是：`has_data=False` 且点位为 `None`，
+由调用方决定展示「--」还是空状态。
 """
 from __future__ import annotations
 
@@ -114,23 +110,25 @@ def index_quote(session: Session, meta: IndexMeta) -> dict:
             flat += 1
 
     if not ratios:
-        # 成分尚未就绪时返回基准点位，避免首页出现 0 点这种明显异常
+        # 没有任何可用成分报价 → 指数不存在点位，字段留空让前端显示「--」。
+        # 不能退回 meta.base：那会让空库看起来已经有行情。
         return {
             "code": meta.code,
             "name": meta.name,
-            "price": meta.base,
-            "prev_close": meta.base,
-            "open": meta.base,
-            "high": meta.base,
-            "low": meta.base,
-            "change": 0.0,
-            "change_pct": 0.0,
+            "price": None,
+            "prev_close": None,
+            "open": None,
+            "high": None,
+            "low": None,
+            "change": None,
+            "change_pct": None,
             "amount": 0.0,
             "volume": 0,
             "up": 0,
             "down": 0,
             "flat": 0,
             "members": 0,
+            "has_data": False,
             "is_index": True,
         }
 
@@ -152,6 +150,7 @@ def index_quote(session: Session, meta: IndexMeta) -> dict:
         "down": down,
         "flat": flat,
         "members": n,
+        "has_data": True,
         "is_index": True,
     }
 
