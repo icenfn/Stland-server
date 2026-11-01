@@ -18,6 +18,7 @@ from ..config import settings
 from ..db import get_session
 from ..models import AccountStatus, Admin, RevokedToken, User
 from ..security import TokenError, body_digest, decode_token, verify_signature
+from . import admin_session
 
 
 def _unauthorized(detail: str) -> HTTPException:
@@ -76,7 +77,44 @@ async def admin_user(
     authorization: str = Header(default=""),
     session: Session = Depends(get_session),
 ) -> Admin:
-    """解析管理员令牌，只认 `admin` 表。"""
+    """解析管理端身份。两条凭据都接受：
+
+    * **后台网页的会话 Cookie**（`stland_admin`）：登录页登录成功后由服务端下发，
+      后台面板里每个 /api/admin/* 请求都靠它过鉴权。
+    * **Bearer 令牌**：给脚本、CI 或用 curl 直接调接口时用。
+
+    为什么必须加 Cookie 这条：上一版把登录迁到独立页面并改用 HttpOnly Cookie，
+    但这里仍然只读 `Authorization` 头。于是「登录成功 → 跳 /admin → 面板拉数据」
+    每一步都因为浏览器不会自动带 Authorization 而 401，前端如实显示
+    「缺少访问令牌」，用户就卡在登录页进不去。
+
+    Cookie 命中时还要再查一次 `admin` 表，确认账号仍然是启用状态 ——
+    会话表只说明「这个浏览器登录过」，不说明「这个人现在还有权限」。
+    """
+    # ① 后台网页：靠 HttpOnly Cookie 里的会话号认人
+    admin_id = admin_session.session_admin_id(admin_session.request_sid(request))
+    if admin_id is not None:
+        admin = session.get(Admin, admin_id)
+        if admin is None or not admin.is_active:
+            # 会话还在但账号被停用 / 删除：顺手撤销，让浏览器回登录页
+            admin_session.drop_session(admin_session.request_sid(request))
+            raise _unauthorized("管理员账户不存在或已停用")
+        request.state.admin_via = "cookie"
+        return admin
+
+    # ② 脚本 / CI：Bearer 令牌
+    if authorization.lower().startswith("bearer "):
+        return _admin_from_token(authorization, request, session)
+
+    raise _unauthorized("缺少访问令牌")
+
+
+def _admin_from_token(
+    authorization: str,
+    request: Request,
+    session: Session,
+) -> Admin:
+    """解析 Bearer 令牌，只认 `admin` 表。"""
     token = _bearer_token(authorization)
     try:
         payload = decode_token(token)

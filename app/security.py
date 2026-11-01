@@ -6,17 +6,27 @@
 * 每个业务请求携带 ``X-Stland-Sign = HMAC-SHA256(secret, canonical)``，
   canonical 由「方法 / 路径 / 时间戳 / 随机数 / 请求体摘要 / 用户标识」按行拼接，
   防止抓包篡改与重放；时间窗口内的随机数只允许使用一次。
+
+关于 JWT 为什么改用 PyJWT：
+    最初这里是一段手写的 HS256 实现 —— base64url 编解码、签名拼接、
+    手动比对 exp / iss。它能用，但「自己实现密码学协议」是典型的
+    长期维护负担：算法轮换（改 RS256）、密钥轮换（kid 头）、
+    clock skew 容忍、以及各种边界（空 payload、非法 base64、alg 篡改
+    即 alg=none 攻击）都要自己逐个想到并写测试。
+    PyJWT 是这条链路上事实标准，上述问题它都已处理并有测试覆盖，
+    且产出的 token 格式与原来的完全一致（HS256 + 标准 claims），
+    因此既有未过期令牌在升级后依然有效，不需要强制用户重新登录。
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
-import json
 import os
 import secrets
 import time
 from typing import Any
+
+import jwt
 
 from .config import settings
 
@@ -51,32 +61,27 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# JWT（HS256，零第三方依赖实现）
+# JWT（HS256，基于 PyJWT）
 # --------------------------------------------------------------------------- #
-def _b64e(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-
-
-def _b64d(data: str) -> bytes:
-    pad = "=" * (-len(data) % 4)
-    return base64.urlsafe_b64decode(data + pad)
+# 令牌的对外约定保持不变，所以下面两个函数仍是全项目唯一的签发/校验入口：
+#   * 算法固定 HS256，且校验时显式指定 algorithms=["HS256"]，
+#     这样伪造 alg=none 或换成 RS256 的令牌都会被直接拒绝；
+#   * 只带 iss 校验（签发方），不校验 aud —— 本服务没有多受众场景。
+JWT_ALGORITHM = "HS256"
+JWT_ISSUER = "stland-server"
 
 
 def create_token(payload: dict[str, Any], ttl: int, secret: str | None = None) -> str:
-    header = {"alg": "HS256", "typ": "JWT"}
+    """签发访问令牌：自动补 iat / exp / jti / iss，其余 claim 由调用方给。"""
     now = int(time.time())
     body: dict[str, Any] = {
         "iat": now,
         "exp": now + ttl,
         "jti": secrets.token_hex(12),
-        "iss": "stland-server",
+        "iss": JWT_ISSUER,
     }
     body.update(payload)
-    head = _b64e(json.dumps(header, separators=(",", ":")).encode())
-    data = _b64e(json.dumps(body, separators=(",", ":")).encode())
-    signing_input = (head + "." + data).encode("ascii")
-    sig = hmac.new((secret or settings.jwt_secret).encode(), signing_input, hashlib.sha256).digest()
-    return head + "." + data + "." + _b64e(sig)
+    return jwt.encode(body, secret or settings.jwt_secret, algorithm=JWT_ALGORITHM)
 
 
 class TokenError(Exception):
@@ -84,25 +89,29 @@ class TokenError(Exception):
 
 
 def decode_token(token: str, secret: str | None = None) -> dict[str, Any]:
+    """校验并解出载荷。
+
+    把 PyJWT 的各类异常统一收敛成本模块的 ``TokenError``：
+    上层只关心「令牌能不能用、为什么不能用」，不该被迫认识
+    ExpiredSignatureError / InvalidAlgorithmError 等一串异常类型。
+    """
     try:
-        head, data, sig = token.split(".")
-    except ValueError as exc:
-        raise TokenError("令牌格式错误") from exc
-    signing_input = (head + "." + data).encode("ascii")
-    expected = hmac.new(
-        (secret or settings.jwt_secret).encode(), signing_input, hashlib.sha256
-    ).digest()
-    if not hmac.compare_digest(_b64d(sig), expected):
-        raise TokenError("令牌签名校验失败")
-    try:
-        payload = json.loads(_b64d(data))
-    except (ValueError, TypeError) as exc:
-        raise TokenError("令牌载荷解析失败") from exc
-    if int(payload.get("exp", 0)) < int(time.time()):
-        raise TokenError("令牌已过期")
-    if payload.get("iss") != "stland-server":
-        raise TokenError("令牌签发方不合法")
-    return payload
+        # 显式限定算法是必须的：不写的话 PyJWT 会按 header 里的 alg 走，
+        # 等于把「用什么算法验签」的决定权交给攻击者伪造的令牌头。
+        return jwt.decode(
+            token,
+            secret or settings.jwt_secret,
+            algorithms=[JWT_ALGORITHM],
+            issuer=JWT_ISSUER,
+            options={"require": ["exp", "iat"]},
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise TokenError("令牌已过期") from exc
+    except jwt.InvalidIssuerError as exc:
+        raise TokenError("令牌签发方不合法") from exc
+    except jwt.InvalidTokenError as exc:
+        # 覆盖格式错误、签名不通过、算法不符、缺必需 claim 等情况
+        raise TokenError("令牌无效") from exc
 
 
 # --------------------------------------------------------------------------- #

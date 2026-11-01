@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import logging
-import secrets
 import time
 from contextlib import asynccontextmanager
 
@@ -27,6 +26,7 @@ from .bootstrap import bootstrap, start_engine, stop_engine
 from .config import settings
 from .engine.session import current_session
 from .routers import account, admin, auth, market, stream, trade, watch
+from .services import admin_session
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,63 +145,23 @@ if _STATIC.is_dir():
 # ---------------------------------------------------------------------------
 # 管理后台登录态
 # ---------------------------------------------------------------------------
-# 为什么用「服务端内存会话 + 随机串 Cookie」而不是把 JWT 直接发给浏览器：
-# 后台只需要「已登录 / 未登录」两态，用不透明的随机会话号更省事，也不会
-# 因为 token 里带了可解析字段而被前端逻辑误用。cookie 走 HttpOnly，
-# 页面脚本读不到它，XSS 也偷不走管理权限。
-ADMIN_COOKIE = "stland_admin"
-ADMIN_SESSION_TTL = 12 * 3600
-_ADMIN_SESSIONS: dict[str, float] = {}
+# 会话表与 Cookie 读写都收敛在 services/admin_session.py：
+# 那里是「登录写会话」与「鉴权读会话」唯一的共同状态源。
+# 之前这部分逻辑只写在 main.py，而 admin_user 依赖仍只认 Bearer 令牌，
+# 于是登录成功也进不去面板（每个接口都回「缺少访问令牌」）。
 
 
 def _admin_logged_in(request: Request) -> bool:
-    sid = request.cookies.get(ADMIN_COOKIE)
-    if not sid:
-        return False
-    exp = _ADMIN_SESSIONS.get(sid)
-    if exp is None:
-        return False
-    if exp < time.time():
-        _ADMIN_SESSIONS.pop(sid, None)
-        return False
-    return True
-
-
-@app.middleware("http")
-async def _admin_session_middleware(request: Request, call_next):
-    """登录成功时下发会话 Cookie。
-
-    放在中间件里而不是改登录路由：登录成功与否由 /api/admin/login 的响应
-    状态码决定（200 即成功），中间件不需要解析响应体，也不必改动该路由
-    既有的返回结构。
-    """
-    response = await call_next(request)
-    if request.url.path == "/api/admin/login" and response.status_code == 200:
-        sid = secrets.token_urlsafe(32)
-        _ADMIN_SESSIONS[sid] = time.time() + ADMIN_SESSION_TTL
-        response.set_cookie(
-            ADMIN_COOKIE,
-            sid,
-            max_age=ADMIN_SESSION_TTL,
-            httponly=True,
-            samesite="lax",
-            path="/",
-        )
-        # 顺手清掉过期会话，避免字典无限增长
-        now = time.time()
-        for old in [k for k, v in _ADMIN_SESSIONS.items() if v < now]:
-            _ADMIN_SESSIONS.pop(old, None)
-    return response
+    """该请求是否带着有效的后台登录态。"""
+    return admin_session.logged_in(request)
 
 
 @app.get("/admin/logout", include_in_schema=False)
 def admin_logout(request: Request):
     """退出登录：撤销内存会话并清除 Cookie。"""
-    sid = request.cookies.get(ADMIN_COOKIE)
-    if sid:
-        _ADMIN_SESSIONS.pop(sid, None)
+    admin_session.drop_session(admin_session.request_sid(request))
     resp = RedirectResponse("/admin/login", status_code=302)
-    resp.delete_cookie(ADMIN_COOKIE, path="/")
+    admin_session.clear_cookie(resp)
     return resp
 
 
