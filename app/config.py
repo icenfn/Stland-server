@@ -46,9 +46,16 @@ class Settings:
         self.tick_seconds: float = float(os.getenv("STLAND_TICK_SECONDS", "1"))
         # 交易模式：a_share=A股（默认，含集合竞价）/ us=美股 / continuous=24h 连续竞价
         # 旧环境变量 STLAND_SESSION_MODE 仍兼容（always->continuous, real->a_share）
+        # 结算模式：t1=当日买入次日可卖 / t0=当日买入当日可卖 / debug=调试（时段失效）
         self.trade_mode: str = os.getenv(
-            "STLAND_TRADE_MODE", os.getenv("STLAND_SESSION_MODE", "a_share")
+            "STLAND_TRADE_MODE", os.getenv("STLAND_SESSION_MODE", "t1")
         )
+        # 交易时段预设：a_share / us / custom（custom 时读 session_slots）
+        self.session_preset: str = os.getenv("STLAND_SESSION_PRESET", "a_share")
+        self.session_slots: str = os.getenv("STLAND_SESSION_SLOTS", "")
+        # 模拟引擎强度系数（运行期可调）
+        self.market_volatility: float = float(os.getenv("STLAND_MARKET_VOLATILITY", "1.0"))
+        self.market_drift: float = float(os.getenv("STLAND_MARKET_DRIFT", "1.0"))
         # 兼容旧属性名，避免第三方脚本直接读 settings.session_mode 时报错
         self.session_mode: str = self.trade_mode
         self.force_open: bool = _bool("STLAND_FORCE_OPEN", False)

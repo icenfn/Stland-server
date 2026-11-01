@@ -329,6 +329,17 @@ table.mdui-table td.ops {
   border-color: #3f51b5;
 }
 
+/* 自定义时段表是多行 JSON：等宽字体 + 可纵向拉伸，
+   否则一条七八段的时段表在单行框里根本没法读 */
+.app-textarea {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  white-space: pre;
+  overflow-x: auto;
+}
+
 .app-field {
   margin-bottom: 12px;
 }

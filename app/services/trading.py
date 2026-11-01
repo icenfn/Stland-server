@@ -196,6 +196,9 @@ def place_order(
 
 def _match_order(session: Session, user: User, order: Order, stock: Stock, quote: dict) -> None:
     """按盘口逐档撮合。limit_price 为 None 表示市价单（五档保护）。"""
+    # 结算规则从当前时钟取，而不是写死 T+1：同一份撮合代码要服务
+    # T+1、T+0 与调试三种模式，只有在成交入账时才分叉。
+    settle_mode = current_session().settle
     levels = _book_levels(stock.code, "buy" if order.side == OrderSide.BUY else "sell")
     if order.order_type == OrderType.LIMIT:
         limit_price = order.price
@@ -244,7 +247,11 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             cost_new = cost_prev + amount + fee.total
             pos.avg_cost = round(cost_new / new_qty, 4) if new_qty else 0.0
             pos.quantity = new_qty
-            # T+1：当日买入不计入可卖
+            # 结算模式决定「当日买入能不能当日卖」：
+            # · T+1 → 不计入可卖，次日日切时由 settle_all 解冻；
+            # · T+0 / 调试 → 直接计入可卖，买入后立刻能挂卖单。
+            if settle_mode == "t0":
+                pos.available += fill.quantity
             pos.last_price = fill.price
             pos.updated_at = time.time()
             session.add(pos)
@@ -464,8 +471,19 @@ def settle_positions(session: Session, user: User) -> dict:
 
 
 def settle_all(session: Session) -> None:
-    """日终结转：把当日买入的持仓转为可卖（T+1），并把日线落库。"""
+    """日终结转：把持仓的可卖额度对齐到「总持仓 − 已冻结」。
+
+    两种结算模式在这里统一收口：
+
+    * **T+1**：日切正是「解锁」的时刻 —— 昨日买入的部分在这一刻变为可卖，
+      所以用 ``available = quantity - frozen`` 一次性重算是对的；
+    * **T+0**：买入时已经在撮合里把数量加进 ``available``，日切时同样重算
+      也无害（结果与增量维护一致），只是把可能存在的漂移纠正回来。
+
+    换句话说，日切永远做「可卖 = 总持仓 − 冻结」的全量重算，是幂等且安全的；
+    T+0 与 T+1 的差别只体现在「买入当天」而不是日切。
+    """
     for pos in session.exec(select(Position)).all():
-        pos.available = pos.quantity - pos.frozen
+        pos.available = max(0, pos.quantity - pos.frozen)
         session.add(pos)
     session.commit()

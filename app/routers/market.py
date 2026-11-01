@@ -37,13 +37,9 @@ def overview(_: None = Depends(optional_signature), session: Session = Depends(g
         "indices": indices,
         "index_minutes": index_engine.index_minutes(session, index_engine.INDEX_LIST[0], limit=120),
         "stats": stats,
-        "session": {
-            "phase": st.phase,
-            "label": st.label,
-            "is_open": st.is_open,
-            "can_trade": st.can_trade,
-            "trade_date": st.trade_date,
-        },
+        # 完整时钟快照：包含结算模式（T+1/T+0/调试）、时段预设、粗粒度 segment
+        # 与两个能力位，客户端状态栏一次拿全，不必再按 phase 硬编码文案。
+        "session": st.to_dict(),
         "rank": {"gainers": gainers, "losers": losers, "active": active},
     }
 

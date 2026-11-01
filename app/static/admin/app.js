@@ -781,6 +781,12 @@
           (String(o.value) === String(c.value) ? ' selected' : '') + '>' + esc(o.label) + '</option>';
       }).join('') + '</select>';
     }
+    if (c.kind === 'text') {
+      // 自由文本（自定义时段表 JSON）：用 textarea 而不是单行 input，
+      // 一段 A 股时段表有七八条，单行框里改 JSON 基本没法编辑。
+      return '<textarea class="app-select app-textarea" rows="6" ' + key + '>' +
+        esc(String(c.value == null ? '' : c.value)) + '</textarea>';
+    }
     return '<input class="app-select" ' + key + ' type="number" step="' +
       (c.kind === 'int' ? '1' : 'any') + '" value="' + esc(String(c.value)) + '" />';
   }

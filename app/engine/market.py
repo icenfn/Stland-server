@@ -29,7 +29,10 @@ from ..config import settings
 from .book import Level, build_levels, clip, snap
 from .session import current_session, trading_days
 
-YEAR_SECONDS = 252 * 4 * 3600  # 一个"交易日"按 4 小时计
+# 一个「交易日」的模拟秒数：A 股 240 分钟。
+# 所有波动率都换算成「每 tick 占一个交易日的比例」再做 sqrt 缩放，
+# 这样 tick_seconds 从 1 秒调到 5 秒、日波动率仍然稳定在设定水平上。
+DAY_SECONDS = 14400
 
 
 @dataclass
@@ -84,6 +87,7 @@ class SecurityState:
             for stale in sorted(self.day_frames)[:-keep_days]:
                 self.day_frames.pop(stale, None)
     cond_vol: float = 0.0           # GARCH 条件方差
+    last_ret: float = 0.0           # 上一 tick 的对数收益（波动率聚集递推要用）
     day_volume_base: float = 0.0
     day_progress: float = 0.0       # 当日已走过的交易进度（0~1），量比要用
 
@@ -205,8 +209,8 @@ class MarketEngine:
     ) -> None:
         with self._lock:
             prev_close = snap(init_price, tick_size)
-            seed_vol = max(1.0, float_shares * 0.00002)
-            bids, asks = build_levels(prev_close, tick_size, 5, 2, seed_vol)
+            seed_vol = max(100.0, float_shares * 0.00002)
+            bids, asks = build_levels(prev_close, tick_size, 5, 2, seed_vol, rng=self._rng)
             self._states[code] = SecurityState(
                 code=code,
                 name=name,
@@ -227,7 +231,8 @@ class MarketEngine:
                 float_shares=float_shares,
                 bids=bids,
                 asks=asks,
-                cond_vol=(vol ** 2) / YEAR_SECONDS,
+                # 条件方差初值 = 日波动率² ÷ 一天 tick 数（即单 tick 方差）
+                cond_vol=(vol ** 2) / max(1.0, DAY_SECONDS / max(settings.tick_seconds, 0.2)),
                 day_volume_base=max(1000.0, float_shares * 0.0006),
             )
 
@@ -243,6 +248,36 @@ class MarketEngine:
 
     def registered(self) -> bool:
         return bool(self._states)
+
+    # ------------------------------------------------------------------ #
+    # 盘口
+    # ------------------------------------------------------------------ #
+    def _refresh_depth(
+        self,
+        st: SecurityState,
+        rng: random.Random,
+        *,
+        intensity: float = 1.0,
+        skew: float = 0.0,
+    ) -> None:
+        """重算某支标的的五档盘口。
+
+        为什么单独抽出来：连续撮合、集合竞价、盘后固定价格交易三种情形都要
+        刷新盘口（只是价格与成交量是否变化不同），下沉成一个方法后三条路径
+        都走同一套档位生成逻辑，不会出现「某个时段档位量算错」。
+
+        价差随瞬时波动放宽：波动越大，做市方越不敢把报价贴着中间价挂。
+        涨停/跌停时再多加一档 —— 单边行情下对手盘更薄。
+        """
+        vol_ret = abs(st.last_ret) / (math.sqrt(max(st.cond_vol, 1e-14)) + 1e-12)
+        spread_ticks = 1 + int(min(6, vol_ret * 2.0))
+        if st.price >= st.limit_up - 1e-9 or st.price <= st.limit_down + 1e-9:
+            spread_ticks += 1
+        seed_vol = max(100.0, st.day_volume_base * 0.02 * st.liquidity)
+        st.bids, st.asks = build_levels(
+            st.price, st.tick_size, 5, spread_ticks, seed_vol,
+            rng=rng, intensity=max(0.4, min(4.0, intensity)), skew=skew,
+        )
 
     # ------------------------------------------------------------------ #
     # 历史回填
@@ -310,10 +345,16 @@ class MarketEngine:
     def tick(self) -> dict[str, dict]:
         """推进一个时间步，返回最新行情快照表。
 
-        交易模式约束：只有当前时段允许连续撮合（`is_open`）时才推进价格。
-        集合竞价、午休、收盘后保持价格不变 —— 否则 K 线在休市时段还会继续长，
-        和真实行情对不上，用户也会疑惑「收盘了怎么还在动」。
-        引擎关闭（`engine_enabled=False`）时同样冻结，便于运营排查问题。
+        时钟给了两个正交能力位，这里分别使用：
+
+        * ``is_open``（连续撮合）为真才**推进价格**并累计成交量 —— 集合竞价、
+          午休、盘后固定价格交易都不该让 K 线继续长，否则收盘后图还在画；
+        * ``can_trade``（可申报）为真就**刷新盘口** —— 集合竞价、盘后固定价格
+          交易虽然不撮合，但委托在源源不断进来，五档挂单量必须跟着动，
+          否则用户点开盘口看到的是几十分钟前的死数据。
+
+        休市（两者皆假）时完全冻结，只回报快照。引擎关闭
+        （``engine_enabled=False``）时同样冻结，便于运营排查问题。
         """
         with self._lock:
             now = time.time()
@@ -321,36 +362,64 @@ class MarketEngine:
                 return {c: s.quote() for c, s in self._states.items()}
             self._last_tick_ts = now
 
-            # 交易模式门禁：休市/集合竞价期间只回报最新快照，不推进
             session = current_session(now)
             self._session = session
+            rng = self._rng
+
+            # 休市：什么都不动，只回报快照
+            if not session.is_open and not session.can_trade:
+                self.ready = self.ready or bool(self._states)
+                return {c: s.quote() for c, s in self._states.items()}
+
+            # 只申报不撮合（集合竞价 / 盘后固定价格）：刷新盘口，价格与成交量不动
             if not session.is_open:
+                for st in self._states.values():
+                    self._refresh_depth(st, rng, intensity=1.0, skew=0.0)
                 self.ready = self.ready or bool(self._states)
                 return {c: s.quote() for c, s in self._states.items()}
 
             self._tick_count += 1
             self._segment = session.segment
-            dt = settings.tick_seconds / YEAR_SECONDS
-            sqdt = math.sqrt(dt)
-            rng = self._rng
+            volatility = float(getattr(settings, "market_volatility", 1.0) or 1.0)
+            drift_coef = float(getattr(settings, "market_drift", 1.0) or 0.0)
 
-            # ---- 市场因子：OU 均值回复 + 波动率聚集 ----
-            m_sigma_daily = 0.011
-            m = -0.08 * self._market_ret + m_sigma_daily * math.sqrt(252) * sqdt * rng.gauss(0, 1)
+            # 时间步长 = 本 tick 占一个交易日的比例（不是占一年）。
+            # 上一版误用年化口径（÷252 日）把方差压小了约 250 倍，
+            # 每 tick 标准差只剩 1e-6 量级 —— 价格几乎从不越过一个最小报价
+            # 单位，盘口与 K 线看起来就像「冻住了」，这是五档不更新的深层原因。
+            dt = max(settings.tick_seconds, 0.2) / DAY_SECONDS
+
+            # ---- 市场因子：OU 均值回复 ----
+            # 日波动 1.1% 摊到一个交易日的 tick 数上：每 tick 标准差
+            # = 0.011 × sqrt(tick_seconds / 14400)。用「交易日 14400 秒」而不是
+            # 年化时间，纯为了口径直观 —— 一个交易日就是 240 分钟。
+            tick_scale = math.sqrt(dt)
+            m = -0.08 * self._market_ret + 0.011 * tick_scale * rng.gauss(0, 1) * volatility
             if rng.random() < 0.0006:
-                m += rng.choice([-1, 1]) * rng.uniform(0.004, 0.012)
+                m += rng.choice([-1, 1]) * rng.uniform(0.0004, 0.0012) * volatility
             self._market_ret = m
 
             for st in self._states.values():
-                # 波动率聚集（GARCH 式递推）
-                st.cond_vol = 0.90 * st.cond_vol + 0.10 * (m ** 2) * 40 + 1e-9
-                inst_vol = math.sqrt(max(st.cond_vol, 1e-10)) * st.vol * 3.0
-                idio = inst_vol * sqdt * rng.gauss(0, 1)
-                ret = st.beta * m + st.drift * dt + idio
+                # ---- GARCH(1,1) 波动率聚集：条件方差按「上一期收益²」递推 ----
+                var_long = max((st.vol ** 2) * dt, 1e-14)
+                st.cond_vol = 0.02 * var_long + 0.06 * (st.last_ret ** 2) + 0.92 * st.cond_vol
+                conn_vol = math.sqrt(max(st.cond_vol, 1e-14))
+                idio = conn_vol * rng.gauss(0, 1) * volatility
+                ret = st.beta * m + st.drift * drift_coef * dt + idio
                 if rng.random() < 0.0004:
-                    ret += rng.choice([-1, 1]) * rng.uniform(0.01, 0.045)
+                    ret += rng.choice([-1, 1]) * rng.uniform(0.001, 0.0045) * volatility
+                st.last_ret = ret
 
                 new_price = snap(st.price * math.exp(ret), st.tick_size)
+
+                # ---- 微观结构的 tick 噪声 ----
+                # 真实盘口里即使没有净买卖压力，报价也会在相邻 tick 之间来回抖：
+                # 这是做市商报价调整与零星成交的结果。没有这一项，低价股（tick 相对
+                # 价格较粗）会连续几十个 tick 价格一模一样，图上是一条直线。
+                tick_move_p = min(0.35, 0.08 * volatility)
+                if new_price == st.price and rng.random() < tick_move_p:
+                    new_price = snap(st.price + (tick if rng.random() < 0.5 else -tick), st.tick_size)
+
                 new_price = clip(new_price, st.limit_down, st.limit_up)
                 st.price = new_price
                 st.high = max(st.high, new_price)
@@ -360,16 +429,34 @@ class MarketEngine:
                 progress = (self._tick_count % 14400) / 14400
                 st.day_progress = progress
                 u_shape = 1.0 + 1.6 * (math.exp(-((progress - 0.02) ** 2) / 0.004) + math.exp(-((0.98 - progress) ** 2) / 0.004))
-                intensity = (0.6 + 12 * abs(ret) * 40) * st.liquidity * u_shape
+                intensity = (0.6 + 480 * abs(ret)) * st.liquidity * u_shape
                 traded = int(max(100, st.day_volume_base * intensity / math.sqrt(14400 / max(settings.tick_seconds, 0.5))))
                 traded = traded // 100 * 100
                 st.volume += traded
                 st.amount += traded * new_price
 
-                # ---- 盘口 ----
-                spread_ticks = 1 + int(min(6, abs(ret) * 900)) + (1 if st.price >= st.limit_up - 1e-9 else 0)
-                seed_vol = max(100.0, st.day_volume_base * 0.02 * st.liquidity)
-                st.bids, st.asks = build_levels(st.price, st.tick_size, 5, spread_ticks, seed_vol)
+                # ---- 盘口：量随活跃度加深，方向随本 tick 收益倾斜 ----
+                skew = max(-0.45, min(0.45, ret / (conn_vol * 2.0 + 1e-9) * 0.25))
+                self._refresh_depth(st, rng, intensity=intensity, skew=skew)
+
+                # ---- 分钟线聚合（带上时段标识，供客户端区分盘前/竞价/盘后） ----
+                minute_ts = int(now // 60 * 60)
+                if st.cur_minute is None or st.cur_minute.ts != minute_ts:
+                    if st.cur_minute is not None:
+                        st.minute_bars.append(st.cur_minute)
+                        # 同时归档到当日帧，「五日」视图要靠它跨日拼接
+                        st.archive(st.cur_minute)
+                    st.cur_minute = MinuteBar(
+                        minute_ts, st.price, st.price, st.price, st.price,
+                        traded, traded * new_price, segment=self._segment,
+                    )
+                else:
+                    cm = st.cur_minute
+                    cm.high = max(cm.high, st.price)
+                    cm.low = min(cm.low, st.price)
+                    cm.close = st.price
+                    cm.volume += traded
+                    cm.amount += traded * new_price
 
                 # ---- 分钟线聚合（带上时段标识，供客户端区分盘前/竞价/盘后） ----
                 minute_ts = int(now // 60 * 60)
@@ -558,7 +645,7 @@ class MarketEngine:
     # 引擎状态与运维控制（后台「模拟引擎」页签使用）
     # ------------------------------------------------------------------ #
     def status(self) -> dict:
-        """引擎运行态快照：开关、节奏、交易模式、时段与标的统计。"""
+        """引擎运行态快照：开关、节奏、结算模式、交易时段与标的统计。"""
         from .session import normalize_mode
 
         with self._lock:
@@ -574,17 +661,7 @@ class MarketEngine:
                 "listed": listed,
                 "segment": st.segment,
                 "trade_mode": normalize_mode(getattr(settings, "trade_mode", None)),
-                "session": {
-                    "mode": st.mode,
-                    "mode_label": st.mode_label,
-                    "phase": st.phase,
-                    "segment": st.segment,
-                    "label": st.label,
-                    "is_open": st.is_open,
-                    "can_trade": st.can_trade,
-                    "trade_date": st.trade_date,
-                    "seconds_left": st.seconds_left,
-                },
+                "session": st.to_dict(),
                 "stats": {
                     "up": sum(1 for s in self._states.values() if s.price > s.prev_close),
                     "down": sum(1 for s in self._states.values() if s.price < s.prev_close),

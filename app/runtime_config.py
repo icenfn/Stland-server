@@ -56,6 +56,14 @@ class Spec:
 
     def coerce(self, raw: Any) -> Any:
         """把前端传来的字符串/数字规范成目标类型，越界抛 ValueError。"""
+        if self.kind == "text":
+            # 自由文本（如自定义时段表 JSON）。这里只做长度与基本格式校验，
+            # 业务层的语义校验交给 `validator`（见 Spec.validator 字段），
+            # 因为运行期配置层不该知道「哪些 segment 合法」这种领域规则。
+            text = str(raw if raw is not None else "").strip()
+            if len(text) > self.maximum:
+                raise ValueError(f"{self.label} 不能超过 {int(self.maximum)} 个字符")
+            return text
         if self.kind == "bool":
             if isinstance(raw, bool):
                 return raw
@@ -92,6 +100,8 @@ class Spec:
             return int(value)
         if self.kind == "choice":
             return str(value)
+        if self.kind == "text":
+            return str(value or "")
         return float(value)
 
 
@@ -122,15 +132,33 @@ RUNTIME_SPECS: dict[str, Spec] = {
         minimum=0.2, maximum=60.0, unit="秒", note="越小行情跳动越快，CPU 占用也越高",
         page="engine",
     ),
+    # ---- 结算模式：只管「当日买入何时可卖」，与时段无关 ----
     "trade_mode": Spec(
-        "trade_mode", "交易模式", "choice", "a_share",
-        choices=("a_share", "us", "continuous"),
+        "trade_mode", "结算模式", "choice", "t1",
+        choices=("t1", "t0", "debug"),
         choice_labels=(
-            ("a_share", "A股"),
-            ("us", "美股"),
-            ("continuous", "连续竞价"),
+            ("t1", "T+1（当日买入次日可卖）"),
+            ("t0", "T+0（当日买入当日可卖）"),
+            ("debug", "调试模式（时段设置失效，全天可交易）"),
         ),
-        note="A股=9:30-11:30/13:00-15:00 连续竞价（含开盘/收盘集合竞价）；美股=美东时段（含盘前盘后）；连续竞价=24小时不间断",
+        note="T+1/T+0 只改结算规则；调试模式下忽略全部交易时段设置，全天可申报可撮合，并按 T+0 结算",
+    ),
+    # ---- 交易时段：预设 + 自定义时段表 ----
+    "session_preset": Spec(
+        "session_preset", "交易时段预设", "choice", "a_share",
+        choices=("a_share", "us", "custom"),
+        choice_labels=(
+            ("a_share", "A股（含集合竞价与盘后固定价格）"),
+            ("us", "美股（含盘前盘后）"),
+            ("custom", "自定义时段表"),
+        ),
+        note="选 A股/美股 用内置时段表；选「自定义」后以下方时段表为准。调试模式下本项失效",
+    ),
+    "session_slots": Spec(
+        "session_slots", "自定义时段表", "text", "",
+        maximum=4000,
+        note='JSON 数组，按时间升序。每段：{"start":"09:30","end":"11:30","label":"上午连续竞价","segment":"continuous","match":true,"trade":true}。'
+             'segment 取 pre/auction/continuous/lunch/post/fixed/closed；match=是否连续撮合，trade=是否受理申报',
     ),
     "market_volatility": Spec(
         "market_volatility", "市场波动率系数", "float", 1.0,

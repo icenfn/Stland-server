@@ -177,5 +177,5 @@ def health() -> dict:
             "listed": len(market_engine.all_codes()),
             "tick_seconds": settings.tick_seconds,
         },
-        "session": {"phase": st.phase, "label": st.label, "can_trade": st.can_trade},
+        "session": st.to_dict(),
     }

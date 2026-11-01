@@ -183,14 +183,8 @@ def handshake() -> dict:
         "app": "Stland",
         "version": settings.app_version,
         "server_time": int(time.time()),
-        "session": {
-            "phase": st.phase,
-            "label": st.label,
-            "is_open": st.is_open,
-            "can_trade": st.can_trade,
-            "trade_date": st.trade_date,
-            "seconds_left": st.seconds_left,
-        },
+        # 完整时钟快照：结算模式（T+1/T+0/调试）+ 时段，客户端启动即据此判定
+        "session": st.to_dict(),
         "signature_required": settings.signature_required,
         "nonce": random_secret(8),
     }

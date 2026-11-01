@@ -141,7 +141,9 @@ class Setting(SQLModel, table=True):
     """
 
     key: str = Field(primary_key=True, max_length=40)
-    value: str = Field(default="", max_length=200)
+    # 长度放宽到 8000：`session_slots`（自定义时段表）是一段 JSON，
+    # 200 字符只够存两三个时段，运营一改多段就会被静默截断。
+    value: str = Field(default="", max_length=8000)
     updated_at: float = Field(default_factory=now_ts)
     updated_by: str = Field(default="", max_length=40)
 
