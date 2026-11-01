@@ -35,6 +35,19 @@ def _db():
     init_db()
 
 
+def _purge() -> None:
+    """清掉本标的的历史痕迹。
+
+    测试可能和持久化测试共用同一个库文件，若上一次运行失败留下的
+    挂单/日线不清掉，盘口档位会累加，断言就变得不可重复。
+    """
+    with session_scope() as db:
+        for row in db.exec(select(DailyBar).where(DailyBar.code == CODE)).all():
+            db.delete(row)
+        for row in db.exec(select(Order).where(Order.code == CODE)).all():
+            db.delete(row)
+
+
 @pytest.fixture()
 def stock():
     market_engine.register(
@@ -47,14 +60,10 @@ def stock():
     st.real_amount = 0.0
     st.volume = 0
     st.amount = 0.0
-    with session_scope() as db:
-        for row in db.exec(select(DailyBar).where(DailyBar.code == CODE)).all():
-            db.delete(row)
+    _purge()
     yield st
     market_engine.unregister(CODE)
-    with session_scope() as db:
-        for row in db.exec(select(DailyBar).where(DailyBar.code == CODE)).all():
-            db.delete(row)
+    _purge()
 
 
 # ---------------------------------------------------------------- 常量与默认值
@@ -143,8 +152,9 @@ def test_roll_day_archives_real_volume_tagged_real(stock):
 # ---------------------------------------------------------------- 盘口真实化
 
 def _make_order(db, user_id: int, side: OrderSide, price: float, qty: int) -> None:
+    import uuid
     db.add(Order(
-        order_no=f"O{user_id}{side.value}{int(price*100)}", user_id=user_id, code=CODE,
+        order_no=f"T{uuid.uuid4().hex[:16]}", user_id=user_id, code=CODE,
         side=side, order_type=OrderType.LIMIT, price=price, quantity=qty,
         status=OrderStatus.PENDING, created_at=time.time(),
     ))
