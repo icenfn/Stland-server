@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 
 from ..config import settings
 from .book import Level, build_levels, clip, snap
+from ..db import session_scope
+from ..models import MinuteFrame
 from .session import current_session, trading_days
 
 # 一个「交易日」的模拟秒数：A 股 240 分钟。
@@ -80,12 +82,36 @@ class SecurityState:
     day_frames: dict[str, list] = field(default_factory=dict)
 
     def archive(self, bar, keep_days: int = 5) -> None:
-        """把一根已收好的分钟线归档到所属自然日，只保留最近 keep_days 天。"""
+        """把一根已收好的分钟线归档到所属自然日，只保留最近 keep_days 天。
+
+        同时写一行 ``minute_frame``：内存字典在进程重启后不复存在，只有落库
+        才能让「五日分时」在下次启动时仍有前四个交易日的数据。
+        落库失败不影响行情主循环，因此单独吞掉异常（DB 短暂锁住是常见情况）。
+        """
         key = time.strftime("%Y-%m-%d", time.localtime(bar.ts))
         self.day_frames.setdefault(key, []).append(bar)
         if len(self.day_frames) > keep_days:
             for stale in sorted(self.day_frames)[:-keep_days]:
                 self.day_frames.pop(stale, None)
+        try:
+            with session_scope() as db:
+                db.merge(
+                    MinuteFrame(
+                        key=f"{self.code}:{int(bar.ts)}",
+                        code=self.code,
+                        ts=int(bar.ts),
+                        day=key,
+                        open=bar.open,
+                        high=bar.high,
+                        low=bar.low,
+                        close=bar.close,
+                        volume=int(bar.volume),
+                        amount=float(bar.amount),
+                        segment=bar.segment,
+                    )
+                )
+        except Exception:  # noqa: BLE001 - 归档失败不能打断撮合主循环
+            pass
     cond_vol: float = 0.0           # GARCH 条件方差
     last_ret: float = 0.0           # 上一 tick 的对数收益（波动率聚集递推要用）
     day_volume_base: float = 0.0
@@ -439,25 +465,6 @@ class MarketEngine:
                 # ---- 盘口：量随活跃度加深，方向随本 tick 收益倾斜 ----
                 skew = max(-0.45, min(0.45, ret / (conn_vol * 2.0 + 1e-9) * 0.25))
                 self._refresh_depth(st, rng, intensity=intensity, skew=skew)
-
-                # ---- 分钟线聚合（带上时段标识，供客户端区分盘前/竞价/盘后） ----
-                minute_ts = int(now // 60 * 60)
-                if st.cur_minute is None or st.cur_minute.ts != minute_ts:
-                    if st.cur_minute is not None:
-                        st.minute_bars.append(st.cur_minute)
-                        # 同时归档到当日帧，「五日」视图要靠它跨日拼接
-                        st.archive(st.cur_minute)
-                    st.cur_minute = MinuteBar(
-                        minute_ts, st.price, st.price, st.price, st.price,
-                        traded, traded * new_price, segment=self._segment,
-                    )
-                else:
-                    cm = st.cur_minute
-                    cm.high = max(cm.high, st.price)
-                    cm.low = min(cm.low, st.price)
-                    cm.close = st.price
-                    cm.volume += traded
-                    cm.amount += traded * new_price
 
                 # ---- 分钟线聚合（带上时段标识，供客户端区分盘前/竞价/盘后） ----
                 minute_ts = int(now // 60 * 60)

@@ -141,6 +141,12 @@ if _STATIC.is_dir():
     app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
 
+@app.get("/admin/login", include_in_schema=False)
+def admin_login_page(request: Request):
+    """独立登录页：不套后台面板的壳，避免登录框被应用栏与侧边栏挤在里面。"""
+    return templates.TemplateResponse(request, "admin/login_page.html", {})
+
+
 @app.get("/admin", include_in_schema=False)
 def admin_panel(request: Request):
     return templates.TemplateResponse(

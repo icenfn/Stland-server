@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>登录 · Stland 管理后台</title>
+  <link rel="stylesheet" href="/static/vendor/mdui/css/mdui.min.css" />
+  <link rel="stylesheet" href="/static/admin/login.css" />
+</head>
+<body class="login-body">
+  <form class="login-card" id="loginForm" autocomplete="on">
+    <div class="login-brand">Stland</div>
+    <div class="login-sub">管理后台</div>
+
+    <label class="login-field">
+      <span>账号</span>
+      <input id="loginUser" type="text" autocomplete="username" required />
+    </label>
+    <label class="login-field">
+      <span>密码</span>
+      <input id="loginPass" type="password" autocomplete="current-password" required />
+    </label>
+
+    <div class="login-err" id="loginErr"></div>
+    <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" type="submit" id="loginBtn">
+      登录
+    </button>
+  </form>
+
+  <script src="/static/vendor/mdui/js/mdui.min.js"></script>
+  <script src="/static/admin/login.js"></script>
+</body>
+</html>

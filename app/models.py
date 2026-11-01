@@ -315,3 +315,29 @@ class RevokedToken(SQLModel, table=True):
 
 def utc_str(ts: float | None = None) -> str:
     return datetime.fromtimestamp(ts or now_ts()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+class MinuteFrame(SQLModel, table=True):
+    """已收好的分钟线（持久化）。
+
+    为什么必须落库：``SecurityState.day_frames`` 只是内存字典，进程重启即清空，
+    而「五日分时」需要跨日拼接近五个交易日的分钟线。只靠内存时，重启后
+    ``minute_series(days=5)`` 只能拿到当天那一段，图上就退化成「只有今天」。
+
+    主键用 ``code:ts`` 复合键字符串，天然幂等：同一分钟重复归档只会覆盖同一行，
+    不会产生重复柱。
+    """
+
+    __tablename__ = "minute_frame"
+
+    key: str = Field(primary_key=True)      # f"{code}:{ts}"
+    code: str = Field(index=True)
+    ts: int = Field(index=True)             # 分钟起点（epoch 秒）
+    day: str = Field(index=True)            # YYYY-MM-DD，跨日分组用
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+    amount: float
+    segment: str = "continuous"

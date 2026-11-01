@@ -212,10 +212,20 @@
   /* 抽屉的开关自己记状态：宽屏才让正文让出 240px。
      mdui 1.x 的让位靠 body 上的 mdui-drawer-body-left，必须跟着开关一起切，
      否则宽屏收起抽屉后右侧会留一条 240px 的空白。 */
-  var drawerOpen = true;
+  /**
+   * 抽屉状态**必须**以 DOM 为准，不能自己维护一个布尔镜像。
+   *
+   * 原实现用 `var drawerOpen = true` 记住状态，但窄屏下 mdui 实际是关闭的，
+   * 而且用户点遮罩关抽屉时 mdui 自己把 drawer 收起了、这个变量却还是 true。
+   * 于是下一次点击算出来「关 → 开」= 关，看起来就要点两次才打开。
+   * 改成每次从 body 上的 mdui 类名读真实状态，镜像变量彻底去掉。
+   */
+  function drawerIsOpen() {
+    return document.body.classList.contains('mdui-drawer-body-left');
+  }
 
   function setDrawer(open) {
-    drawerOpen = !!open;
+    var drawerOpen = !!open;
     var d = navDrawer();
     if (d) {
       if (drawerOpen) d.open();
@@ -225,7 +235,8 @@
   }
 
   function toggleDrawer() {
-    setDrawer(!drawerOpen);
+    // 读 DOM 的真实状态再取反，避免「以为开着其实关着」导致第一次点击无效
+    setDrawer(!drawerIsOpen());
   }
 
   /* ---------------------------------------------------------------- 登录页 */
