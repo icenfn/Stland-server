@@ -39,8 +39,8 @@ GROUP_SIM = "sim"
 
 # 域的中文名。后台导航/页面标题用它，避免各处硬编码字符串。
 GROUP_LABELS: dict[str, str] = {
-    GROUP_SYSTEM: "系统配置",
-    GROUP_SIM: "模拟器配置",
+    GROUP_SYSTEM: "系统设置",
+    GROUP_SIM: "模拟行情",
 }
 
 # 每个域下的子分组及展示顺序。后台按这个顺序堆卡片，
@@ -48,12 +48,12 @@ GROUP_LABELS: dict[str, str] = {
 GROUP_SECTIONS: dict[str, list[tuple[str, str]]] = {
     GROUP_SYSTEM: [
         ("security", "安全与访问控制"),
-    ],
-    GROUP_SIM: [
-        ("engine", "行情引擎"),
         ("session", "交易时段"),
         ("settlement", "结算规则"),
         ("fees", "交易费用"),
+    ],
+    GROUP_SIM: [
+        ("engine", "行情引擎"),
         ("account", "账户默认值"),
     ],
 }
@@ -166,7 +166,7 @@ RUNTIME_SPECS: dict[str, Spec] = {
         group=GROUP_SIM, section="engine",
     ),
 
-    # ======================= 模拟器配置 · 交易时段 =======================
+    # ======================= 系统设置 · 交易时段 =======================
     "session_preset": Spec(
         "session_preset", "交易时段预设", "choice", 
         choices=("a_share", "us", "custom"),
@@ -176,17 +176,17 @@ RUNTIME_SPECS: dict[str, Spec] = {
             ("custom", "自定义时段表"),
         ),
         note="选 A股/美股 用内置时段表；选「自定义」后以下方时段表为准。调试模式下本项失效",
-        group=GROUP_SIM, section="session",
+        group=GROUP_SYSTEM, section="session",
     ),
     "session_slots": Spec(
         "session_slots", "自定义时段表", "text", 
         maximum=4000,
         note='JSON 数组，按时间升序。每段：{"start":"09:30","end":"11:30","label":"上午连续竞价","segment":"continuous","match":true,"trade":true}。'
              'segment 取 pre/auction/continuous/lunch/post/fixed/closed；match=是否连续撮合，trade=是否受理申报',
-        group=GROUP_SIM, section="session",
+        group=GROUP_SYSTEM, section="session",
     ),
 
-    # ======================= 模拟器配置 · 结算规则 =======================
+    # ======================= 系统设置 · 结算规则 =======================
     "trade_mode": Spec(
         "trade_mode", "结算模式", "choice", 
         choices=("t1", "t0", "debug"),
@@ -196,29 +196,29 @@ RUNTIME_SPECS: dict[str, Spec] = {
             ("debug", "调试模式（时段设置失效，全天可交易）"),
         ),
         note="T+1/T+0 只改结算规则；调试模式下忽略全部交易时段设置，全天可申报可撮合，并按 T+0 结算",
-        group=GROUP_SIM, section="settlement",
+        group=GROUP_SYSTEM, section="settlement",
     ),
 
-    # ======================= 模拟器配置 · 交易费用 =======================
+    # ======================= 系统设置 · 交易费用 =======================
     "commission_rate": Spec(
         "commission_rate", "佣金费率", "float", 
         minimum=0.0, maximum=0.003, note="万2.5 = 0.00025，双向收取",
-        group=GROUP_SIM, section="fees",
+        group=GROUP_SIM, section="account",
     ),
     "commission_min": Spec(
         "commission_min", "最低佣金", "float", 
         minimum=0.0, maximum=100.0, unit="元", note="单笔佣金下限",
-        group=GROUP_SIM, section="fees",
+        group=GROUP_SIM, section="account",
     ),
     "stamp_tax_rate": Spec(
         "stamp_tax_rate", "印花税率", "float", 
         minimum=0.0, maximum=0.003, note="仅卖出收取，万5 = 0.0005",
-        group=GROUP_SIM, section="fees",
+        group=GROUP_SYSTEM, section="fees",
     ),
     "transfer_fee_rate": Spec(
         "transfer_fee_rate", "过户费率", "float", 
         minimum=0.0, maximum=0.001, note="双向收取，万0.1 = 0.00001",
-        group=GROUP_SIM, section="fees",
+        group=GROUP_SYSTEM, section="fees",
     ),
 
     # ======================= 模拟器配置 · 账户默认值 =======================
@@ -228,7 +228,7 @@ RUNTIME_SPECS: dict[str, Spec] = {
         group=GROUP_SIM, section="account",
     ),
 
-    # ======================= 系统配置 · 安全与访问控制 =======================
+    # ======================= 系统设置 · 安全与访问控制 =======================
     # 这两项与股市无关：换掉上面的模拟引擎它们照样成立，属于服务自身的安全边界。
     "signature_required": Spec(
         "signature_required", "请求签名校验", "bool", 

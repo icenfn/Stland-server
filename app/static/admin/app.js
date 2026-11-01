@@ -1074,9 +1074,7 @@
           if (!secItems.length) return '';
           return '<div class="mdui-card app-card">' +
             '<div class="app-card-head">' +
-              '<div class="app-card-title">' + esc(sec.label) +
-                '<span class="app-cfg-count">' + secItems.length + ' 项</span>' +
-              '</div>' +
+              '<div class="app-card-title">' + esc(sec.label) + '</div>' +
             '</div>' +
             '<div class="app-card-body">' +
               '<div class="app-cfg-grid">' + secItems.map(cfgFieldHtml).join('') + '</div>' +

@@ -118,15 +118,15 @@ ADMIN_NAV = [
     },
     {
         "key": "market_data",
-        "label": "行情数据",
+        "label": "市场管理",
         "icon": "show_chart",
         "children": [
             {"key": "stocks", "label": "标的管理", "icon": "list"},
             {"key": "indices", "label": "指数管理", "icon": "timeline"},
+            {"key": "boards", "label": "板块", "icon": "view_column"},
+            {"key": "industries", "label": "行业", "icon": "category"},
         ],
     },
-    {"key": "boards", "label": "板块", "icon": "view_column"},
-    {"key": "industries", "label": "行业", "icon": "category"},
     {
         "key": "simulator",
         "label": "模拟行情",

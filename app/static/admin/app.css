@@ -540,15 +540,3 @@ table.mdui-table td.ops {
   }
 }
 
-/* 分区卡片标题里的项数徽标：让「行情引擎 4 项」这类信息在折叠时也能看到 */
-.app-cfg-count {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 1px 7px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--mdui-color-theme, #e8383d);
-  background: rgba(232, 56, 61, 0.1);
-  border-radius: 9px;
-  vertical-align: middle;
-}
