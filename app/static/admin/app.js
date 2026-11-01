@@ -117,9 +117,14 @@
     return new Promise(function (resolve) {
       if (window.mdui && typeof mdui.confirm === 'function') {
         try {
+          // 必须显式关掉 mdui 的 history 联动：默认 history=true 时，对话框
+          // 关闭会调一次 window.history.back()，而这次历史回退是异步发生的，
+          // 会把紧接着执行的 location 跳转覆盖掉 —— 浏览器停回原页面，
+          // 表现就是「点了确认没反应」（退出登录踩的就是这个坑）。
           mdui.confirm(text, title || '请确认',
             function () { resolve(true); },
-            function () { resolve(false); });
+            function () { resolve(false); },
+            { history: false });
           return;
         } catch (e) {
           /* 落到原生确认 */
@@ -250,8 +255,10 @@
   function doLogout() {
     ask('确认退出当前管理员账号？', '退出登录').then(function (ok) {
       if (!ok) return;
-      // 会话在服务端，必须走 /admin/logout 由服务端撤销并清 Cookie
-      window.location.href = '/admin/logout';
+      // 会话在服务端，必须走 /admin/logout 由服务端撤销并清 Cookie。
+      // 等对话框关闭流程走完再跳转，避免被对话框的收尾动作打断；
+      // 用 replace 而不是 href，退出后按「后退」不会回到面板。
+      setTimeout(function () { window.location.replace('/admin/logout'); }, 80);
     });
   }
 

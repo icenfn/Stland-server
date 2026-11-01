@@ -181,7 +181,8 @@ RUNTIME_SPECS: dict[str, Spec] = {
     "session_slots": Spec(
         "session_slots", "自定义时段表", "text", 
         maximum=4000,
-        note='JSON 数组，按时间升序。每段：{"start":"09:30","end":"11:30","label":"上午连续竞价","segment":"continuous","match":true,"trade":true}。'
+        note='仅在预设为「自定义时段表」时生效；A股/美股 走代码内置时段表，本项被忽略。'
+             'JSON 数组，按时间升序。每段：{"start":"09:30","end":"11:30","label":"上午连续竞价","segment":"continuous","match":true,"trade":true}。'
              'segment 取 pre/auction/continuous/lunch/post/fixed/closed；match=是否连续撮合，trade=是否受理申报',
         group=GROUP_SYSTEM, section="session",
     ),
