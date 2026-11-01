@@ -10,6 +10,19 @@ def _bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
 
+#: 自定义时段表的默认值：与 A 股内置时段表保持一致，运营切到「自定义」
+#: 后开箱即可用，不必对着空文本框自己拼 JSON。
+DEFAULT_SESSION_SLOTS = (
+    '[{"start":"09:15","end":"09:25","label":"开盘集合竞价","segment":"auction","match":false,"trade":true},'
+    '{"start":"09:25","end":"09:30","label":"待开盘","segment":"auction","match":false,"trade":true},'
+    '{"start":"09:30","end":"11:30","label":"上午连续竞价","segment":"continuous","match":true,"trade":true},'
+    '{"start":"11:30","end":"13:00","label":"午间休市","segment":"lunch","match":false,"trade":false},'
+    '{"start":"13:00","end":"14:57","label":"下午连续竞价","segment":"continuous","match":true,"trade":true},'
+    '{"start":"14:57","end":"15:00","label":"收盘集合竞价","segment":"auction","match":false,"trade":true},'
+    '{"start":"15:05","end":"15:30","label":"盘后固定价格交易","segment":"fixed","match":false,"trade":true}]'
+)
+
+
 class Settings:
     """运行期配置（不可变语义，启动时一次性读取）。"""
 
@@ -52,7 +65,7 @@ class Settings:
         )
         # 交易时段预设：a_share / us / custom（custom 时读 session_slots）
         self.session_preset: str = os.getenv("STLAND_SESSION_PRESET", "a_share")
-        self.session_slots: str = os.getenv("STLAND_SESSION_SLOTS", "")
+        self.session_slots: str = os.getenv("STLAND_SESSION_SLOTS", DEFAULT_SESSION_SLOTS)
         # 模拟引擎强度系数（运行期可调）
         self.market_volatility: float = float(os.getenv("STLAND_MARKET_VOLATILITY", "1.0"))
         self.market_drift: float = float(os.getenv("STLAND_MARKET_DRIFT", "1.0"))

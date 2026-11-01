@@ -51,10 +51,10 @@ GROUP_SECTIONS: dict[str, list[tuple[str, str]]] = {
         ("session", "交易时段"),
         ("settlement", "结算规则"),
         ("fees", "交易费用"),
+        ("account", "账户默认值"),
     ],
     GROUP_SIM: [
         ("engine", "行情引擎"),
-        ("account", "账户默认值"),
     ],
 }
 
@@ -82,7 +82,7 @@ class Spec:
     # 选项的展示名（value -> 中文标签）。为空时后台直接显示 value，
     # 交易模式这种「存 a_share、显示 A股」的项必须给标签，否则运营看不懂下拉框
     choice_labels: tuple[tuple[str, str], ...] = ()
-    # 归属的域：system=系统配置、sim=模拟器配置，也是后台分栏的唯一依据。
+    # 归属的域：system=系统配置、sim=模拟配置，也是后台分栏的唯一依据。
     group: str = GROUP_SYSTEM
     # 域内的子分组 key，见 GROUP_SECTIONS。决定这一项落在哪个卡片里。
     section: str = "security"
@@ -140,7 +140,7 @@ class Spec:
 
 # 白名单：键名必须与 `settings` 上的属性同名，改完直接覆盖属性即生效
 RUNTIME_SPECS: dict[str, Spec] = {
-    # ======================= 模拟器配置 · 行情引擎 =======================
+    # ======================= 模拟配置 · 行情引擎 =======================
     # 这四项直接决定「这个模拟市场的价格怎么动」，与账户、费用完全无关。
     "engine_enabled": Spec(
         "engine_enabled", "行情引擎开关", "bool", 
@@ -171,8 +171,8 @@ RUNTIME_SPECS: dict[str, Spec] = {
         "session_preset", "交易时段预设", "choice", 
         choices=("a_share", "us", "custom"),
         choice_labels=(
-            ("a_share", "A股（含集合竞价与盘后固定价格）"),
-            ("us", "美股（含盘前盘后）"),
+            ("a_share", "A股"),
+            ("us", "美股"),
             ("custom", "自定义时段表"),
         ),
         note="选 A股/美股 用内置时段表；选「自定义」后以下方时段表为准。调试模式下本项失效",
@@ -191,9 +191,9 @@ RUNTIME_SPECS: dict[str, Spec] = {
         "trade_mode", "结算模式", "choice", 
         choices=("t1", "t0", "debug"),
         choice_labels=(
-            ("t1", "T+1（当日买入次日可卖）"),
-            ("t0", "T+0（当日买入当日可卖）"),
-            ("debug", "调试模式（时段设置失效，全天可交易）"),
+            ("t1", "T+1"),
+            ("t0", "T+0"),
+            ("debug", "调试模式"),
         ),
         note="T+1/T+0 只改结算规则；调试模式下忽略全部交易时段设置，全天可申报可撮合，并按 T+0 结算",
         group=GROUP_SYSTEM, section="settlement",
@@ -203,12 +203,12 @@ RUNTIME_SPECS: dict[str, Spec] = {
     "commission_rate": Spec(
         "commission_rate", "佣金费率", "float", 
         minimum=0.0, maximum=0.003, note="万2.5 = 0.00025，双向收取",
-        group=GROUP_SIM, section="account",
+        group=GROUP_SYSTEM, section="account",
     ),
     "commission_min": Spec(
         "commission_min", "最低佣金", "float", 
         minimum=0.0, maximum=100.0, unit="元", note="单笔佣金下限",
-        group=GROUP_SIM, section="account",
+        group=GROUP_SYSTEM, section="account",
     ),
     "stamp_tax_rate": Spec(
         "stamp_tax_rate", "印花税率", "float", 
@@ -221,11 +221,11 @@ RUNTIME_SPECS: dict[str, Spec] = {
         group=GROUP_SYSTEM, section="fees",
     ),
 
-    # ======================= 模拟器配置 · 账户默认值 =======================
+    # ======================= 模拟配置 · 账户默认值 =======================
     "seed_cash": Spec(
         "seed_cash", "新账户初始资金", "float", 
         minimum=0.0, maximum=1e9, unit="元", note="注册与批量建户默认值",
-        group=GROUP_SIM, section="account",
+        group=GROUP_SYSTEM, section="account",
     ),
 
     # ======================= 系统设置 · 安全与访问控制 =======================
@@ -324,7 +324,7 @@ def sections_of(group: str) -> list[dict]:
         section = RUNTIME_SPECS[key].section
         counts[section] = counts.get(section, 0) + 1
     return [
-        {"key": key, "label": label, "count": counts.get(key, 0)}
+        {"key": key, "label": label}
         for key, label in GROUP_SECTIONS.get(group, [])
         if counts.get(key)
     ]
@@ -393,7 +393,7 @@ def update(
 def reset_defaults(session: Session, operator: str = "admin", group: str | None = None) -> dict:
     """把配置恢复为默认值，并清空库里的覆盖记录。
 
-    `group` 非空时只重置该域：在「模拟器配置」页点恢复默认，
+    `group` 非空时只重置该域：在「模拟配置」页点恢复默认，
     不应该把「请求签名校验」也一并重置掉。
     这里用 `default_value`（部署基线）而非任何代码常量，
     否则会把联调期用环境变量关掉的开关重新打开。

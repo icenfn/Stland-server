@@ -227,7 +227,7 @@ def get_settings(
     """可调配置项及其当前值（含类型、范围、说明，前端据此渲染表单）。
 
     传 `group` 只返回该域：后台「系统配置」拿 system、
-    「模拟器配置」拿 sim，各自页面不会出现对方域的项目。
+    「模拟配置」拿 sim，各自页面不会出现对方域的项目。
     不传时返回全部，保留给诊断与导出场景。
     """
     scope = _check_group(group) if group else None
@@ -259,7 +259,7 @@ def put_settings(
 
     带 `group` 时只接受该域内的键。两个页面各自提交自己的表单，
     这样即使前端状态串了（比如同时开着两个标签页），
-    在「模拟器配置」页保存也不可能顺手改掉「请求签名校验」这种系统开关。
+    在「模拟配置」页保存也不可能顺手改掉「请求签名校验」这种系统开关。
     """
     if not payload.values:
         raise HTTPException(400, detail={"code": "EMPTY", "message": "没有需要修改的配置"})
@@ -277,7 +277,7 @@ def reset_settings(
 ) -> dict:
     """恢复默认值。带 `group` 时只重置该域。
 
-    在「模拟器配置」页点恢复默认，不应把「请求签名校验」这类系统开关
+    在「模拟配置」页点恢复默认，不应把「请求签名校验」这类系统开关
     一起重置 —— 那会让整个客户端因为签名被重新要求而整片报错。
     """
     scope = _check_group(group) if group else None

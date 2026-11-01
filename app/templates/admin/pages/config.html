@@ -2,8 +2,8 @@
   <div class="app-page-head">
     <div class="app-page-title">系统设置</div>
     <div class="app-page-desc">
-      与服务自身相关的开关：访问控制与登录安全。模拟盘的市场规则（行情、时段、结算、费率、初始资金）
-      已独立到「模拟器 › 模拟器配置」页。
+      服务自身的安全开关，以及整个模拟盘的市场规则：交易时段、结算方式、交易费用和新账户默认值。
+      保存后立即生效。
     </div>
     <div class="app-toolbar">
       <button class="mdui-btn mdui-ripple" id="refreshCfg">刷新</button>
@@ -12,14 +12,9 @@
     </div>
   </div>
 
-  <div class="mdui-card">
-    <div class="app-card-head">
-      <div class="app-card-title">安全与访问控制</div>
-    </div>
-    <div class="app-card-body">
-      <div class="app-cfg-grid" id="cfgGrid"></div>
-    </div>
-  </div>
+  <!-- 分区渲染：顺序由后端 GROUP_SECTIONS 决定，新增配置项只需在
+       runtime_config.py 标好 section 就会自动归位。 -->
+  <div id="cfgSections"></div>
 
   <div class="mdui-card app-card">
     <div class="app-card-head">
@@ -29,7 +24,8 @@
       <ul class="mdui-typo">
         <li>关闭「请求签名校验」后服务端不再核对 HMAC 签名，仅建议联调期临时关闭，正式环境保持开启。</li>
         <li>「登录失败锁定阈值」按账号统计连续失败次数，触发后锁定 5 分钟。</li>
-        <li>模拟盘相关的行情、交易时段、结算模式、费用与初始资金请到「模拟器 › 模拟器配置」调整。</li>
+        <li>「交易时段预设」选择「自定义时段表」后，下方时段表才会展开并生效。</li>
+        <li>行情引擎的推进速度与波动强度在「模拟行情 › 模拟配置」中调整。</li>
       </ul>
     </div>
   </div>

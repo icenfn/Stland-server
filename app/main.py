@@ -133,7 +133,7 @@ ADMIN_NAV = [
         "icon": "ondemand_video",
         "children": [
             {"key": "engine", "label": "模拟引擎", "icon": "settings_backup_restore"},
-            {"key": "simcfg", "label": "模拟器配置", "icon": "tune"},
+            {"key": "simcfg", "label": "模拟配置", "icon": "tune"},
             {"key": "data", "label": "数据初始化", "icon": "storage"},
         ],
     },

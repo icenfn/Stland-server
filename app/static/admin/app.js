@@ -263,7 +263,7 @@
     admins: loadAdmins,
     stocks: loadStocks,
     indices: loadIndices,
-    // 引擎页只管运行状态与重置；引擎参数（间隔/波动/漂移/开关）已归入模拟器配置
+    // 引擎页只管运行状态与重置；引擎参数（间隔/波动/漂移/开关）已归入模拟配置
     engine: loadEngine,
     simcfg: loadSimCfg,
     boards: loadBoards,
@@ -982,10 +982,10 @@
   /* -------------------------------------------------------------- 运行期配置 */
   /* 运行期配置分两个域：
    *   system（系统配置）—— 服务自身的安全开关，与股市无关；
-   *   sim（模拟器配置）—— 这个模拟股市的市场规则：行情引擎、交易时段、结算、
+   *   sim（模拟配置）—— 这个模拟股市的市场规则：行情引擎、交易时段、结算、
    *                        交易费用、新账户初始资金。
    * 两个页面各自只取自己那一域，保存与恢复默认也只作用于本域。
-   * 这一点必须严格：如果在「模拟器配置」页点恢复默认把「请求签名校验」
+   * 这一点必须严格：如果在「模拟配置」页点恢复默认把「请求签名校验」
    * 也一并重置回 true，整个客户端立刻因为签名被重新要求而整片报错。
    */
   state.cfgByGroup = {};
@@ -1039,6 +1039,18 @@
   }
 
   function bindCfgInputs(host, group) {
+    // 交易时段预设与自定义时段表联动：只有选中「custom」时才展开时段表，
+    // 否则把整块隐藏 —— 选 A股/美股 时它不生效，留着只会让人误以为改了有用。
+    var slotsBox = host.querySelector('[data-cfgbox="session_slots"]');
+    var presetEl = host.querySelector('[data-cfg="session_preset"]');
+    var syncSlots = function () {
+      if (!slotsBox || !presetEl) return;
+      slotsBox.style.display = String(presetEl.value) === 'custom' ? '' : 'none';
+    };
+    if (presetEl) {
+      presetEl.addEventListener('change', syncSlots);
+      syncSlots();
+    }
     host.querySelectorAll('[data-cfg]').forEach(function (el) {
       var mark = function () {
         if (!state.cfgDirty[group]) state.cfgDirty[group] = {};
@@ -1088,7 +1100,7 @@
     });
   }
 
-  function loadSystemCfg() { return loadCfgGroup('system', 'cfgGrid', false); }
+  function loadSystemCfg() { return loadCfgGroup('system', 'cfgSections', true); }
   function loadSimCfg() { return loadCfgGroup('sim', 'simCfgSections', true); }
 
   function saveConfig(group) {
@@ -1120,7 +1132,7 @@
   }
 
   function resetConfig(group) {
-    var label = group === 'sim' ? '模拟器配置' : '系统配置';
+    var label = group === 'sim' ? '模拟配置' : '系统设置';
     ask('确认把「' + label + '」恢复为默认值？另一域的配置不受影响。', '恢复默认')
       .then(function (ok) {
         if (!ok) return;
