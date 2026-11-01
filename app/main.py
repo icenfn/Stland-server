@@ -125,20 +125,19 @@ ADMIN_NAV = [
             {"key": "indices", "label": "指数管理", "icon": "timeline"},
         ],
     },
-    {"key": "boards", "label": "板块管理", "icon": "view_column"},
-    {"key": "industries", "label": "行业管理", "icon": "category"},
+    {"key": "boards", "label": "板块", "icon": "view_column"},
+    {"key": "industries", "label": "行业", "icon": "category"},
     {
         "key": "simulator",
-        "label": "模拟器",
-        "icon": "settings_backup_restore",
+        "label": "模拟行情",
+        "icon": "ondemand_video",
         "children": [
             {"key": "engine", "label": "模拟引擎", "icon": "settings_backup_restore"},
             {"key": "simcfg", "label": "模拟器配置", "icon": "tune"},
             {"key": "data", "label": "数据初始化", "icon": "storage"},
         ],
     },
-    {"key": "ops", "label": "撮合质量", "icon": "swap_horiz"},
-    {"key": "config", "label": "系统配置", "icon": "tune"},
+    {"key": "config", "label": "系统设置", "icon": "settings"},
 ]
 
 # 后台自己的 css/js 与 mdui、Material Icons 字体都从 /static 出

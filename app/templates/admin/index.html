@@ -41,8 +41,9 @@
   <nav class="app-nav">
     {% for item in nav %}
       {% if item.children %}
-      {# 分组：一级只负责展开/收起，不切换页面 #}
-      <div class="nav-group" data-group="{{ item.key }}">
+      {# 分组：一级只负责展开/收起，不切换页面。
+         默认展开——分组收起时侧边栏只剩父级名字，看不出下面还有几个页面。 #}
+      <div class="nav-group is-open" data-group="{{ item.key }}">
         <a href="javascript:;" class="mdui-list-item mdui-ripple nav-group-head">
           <i class="mdui-list-item-icon mdui-icon material-icons">{{ item.icon }}</i>
           <div class="mdui-list-item-content">{{ item.label }}</div>
@@ -85,7 +86,6 @@
   {% include "admin/pages/industries.html" %}
   {% include "admin/pages/config.html" %}
   {% include "admin/pages/data.html" %}
-  {% include "admin/pages/ops.html" %}
 </main>
 
 {# ---------------------------------------------------------------- 对话框 #}

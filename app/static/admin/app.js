@@ -270,7 +270,6 @@
     industries: loadIndustries,
     config: loadSystemCfg,
     data: loadSeedStatus,
-    ops: loadOps,
   };
 
   function showPage(key, skipLoad) {
@@ -339,6 +338,8 @@
     }).catch(function (e) {
       $('ovKpi').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
     });
+    // 撮合质量并入总览：统计与成交额 Top10 与总览同屏刷新
+    loadMatchingStats();
     // 排名与总览同屏：转结与风险页撤掉后，总资产排名就落在这里
     return loadLeaderboard(board);
   }
@@ -1171,10 +1172,11 @@
   }
 
   /* -------------------------------------------------------------- 撮合质量 */
-  function loadOps() {
-    $('matchKpi').innerHTML = '<div class="app-loading">加载中…</div>';
+  /** 撮合质量：原独立页已并入总览，这里把统计与成交额 Top10 写到总览的元素上 */
+  function loadMatchingStats() {
+    $('ovMatchKpi').innerHTML = '<div class="app-loading">加载中…</div>';
     return api('/api/admin/matching').then(function (m) {
-      $('matchKpi').innerHTML = [
+      $('ovMatchKpi').innerHTML = [
         kpi('委托总数', int(m.order_count)),
         kpi('成交笔数', int(m.trade_count)),
         kpi('撮成率', (m.fill_rate_pct === undefined ? '--' : m.fill_rate_pct + '%')),
@@ -1183,7 +1185,7 @@
       ].join('');
 
       var rows = m.top_symbols || [];
-      $('matchBody').innerHTML = rows.length ? rows.map(function (o) {
+      $('ovMatchBody').innerHTML = rows.length ? rows.map(function (o) {
         return '<tr>' +
           '<td>' + esc(o.code) + '</td>' +
           '<td>' + esc(o.name || '--') + '</td>' +
@@ -1193,8 +1195,8 @@
           '</tr>';
       }).join('') : emptyRow(5, '暂无成交');
     }).catch(function (e) {
-      $('matchKpi').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
-      $('matchBody').innerHTML = emptyRow(5, e.message);
+      $('ovMatchKpi').innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
+      $('ovMatchBody').innerHTML = emptyRow(5, e.message);
     });
   }
 
@@ -1279,7 +1281,6 @@
     $('seedBtn').addEventListener('click', runSeed);
 
     /* 撮合 */
-    $('refreshOps').addEventListener('click', loadOps);
 
     /* 板块 */
     $('refreshBoards').addEventListener('click', loadBoards);

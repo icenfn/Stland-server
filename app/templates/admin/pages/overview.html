@@ -17,6 +17,29 @@
     <div class="app-card-body" id="ovSession"></div>
   </div>
 
+  <div class="app-kpi-grid" id="ovMatchKpi"></div>
+
+  <div class="mdui-card app-card">
+    <div class="app-card-head">
+      <div class="app-card-title">成交额 Top 10</div>
+      <div class="app-card-sub">按累计成交额降序</div>
+    </div>
+    <div class="mdui-table-fluid">
+      <table class="mdui-table">
+        <thead>
+          <tr>
+            <th>代码</th>
+            <th>名称</th>
+            <th class="num">成交笔数</th>
+            <th class="num">成交额</th>
+            <th class="num">成交量</th>
+          </tr>
+        </thead>
+        <tbody id="ovMatchBody"></tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="mdui-card app-card">
     <div class="app-card-head">
       <div class="app-card-title">总资产排名</div>
