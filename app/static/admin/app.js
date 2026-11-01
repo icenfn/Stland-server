@@ -262,10 +262,12 @@
     institution: function () { return loadAccounts('institution'); },
     admins: loadAdmins,
     stocks: function () { return Promise.all([loadStocks(), loadIndices()]); },
-    engine: function () { return Promise.all([loadEngine(), loadConfig('engine')]); },
+    // 引擎页只管运行状态与重置；引擎参数（间隔/波动/漂移/开关）已归入模拟器配置
+    engine: loadEngine,
+    simcfg: loadSimCfg,
     boards: loadBoards,
     industries: loadIndustries,
-    config: loadConfig,
+    config: loadSystemCfg,
     data: loadSeedStatus,
     ops: loadOps,
   };
@@ -911,7 +913,18 @@
     }).catch(function (e) { notify(e.message); });
   }
 
-  /* -------------------------------------------------------------- 系统配置 */
+  /* -------------------------------------------------------------- 运行期配置 */
+  /* 运行期配置分两个域：
+   *   system（系统配置）—— 服务自身的安全开关，与股市无关；
+   *   sim（模拟器配置）—— 这个模拟股市的市场规则：行情引擎、交易时段、结算、
+   *                        交易费用、新账户初始资金。
+   * 两个页面各自只取自己那一域，保存与恢复默认也只作用于本域。
+   * 这一点必须严格：如果在「模拟器配置」页点恢复默认把「请求签名校验」
+   * 也一并重置回 true，整个客户端立刻因为签名被重新要求而整片报错。
+   */
+  state.cfgByGroup = {};
+  state.cfgDirty = {};
+
   function cfgControl(c) {
     var key = 'data-cfg="' + esc(c.key) + '"';
     if (c.kind === 'bool') {
@@ -946,82 +959,113 @@
       (c.kind === 'int' ? '1' : 'any') + '" value="' + esc(String(c.value)) + '" />';
   }
 
-  function loadConfig(page) {
-    // 按归属页面渲染：系统配置页只显示 system 项，模拟引擎页只显示 engine 项。
-    // 值仍来自同一份 /api/admin/settings，保存逻辑也共用，只有展示位置不同。
-    var isEngine = page === 'engine';
-    var grid = $(isEngine ? 'engineCfgGrid' : 'cfgGrid');
-    if (!grid) return Promise.resolve();
-    var want = isEngine ? 'engine' : 'system';
-    var grid = grid;
-    grid.innerHTML = '<div class="app-loading">加载中…</div>';
-    return api('/api/admin/settings').then(function (d) {
-      state.cfg = d.items || [];
-      state.cfgDirty = {};
-      if (!state.cfg.length) {
-        grid.innerHTML = '<div class="app-loading">暂无可配置项</div>';
-        return;
-      }
-      grid.innerHTML = state.cfg.map(function (c) {
-        var range = (c.kind === 'float' || c.kind === 'int')
-          ? (c.min + ' ~ ' + c.max + (c.unit ? ' ' + c.unit : '')) : '';
-        return '<div class="app-cfg" data-cfgbox="' + esc(c.key) + '">' +
-          '<div class="app-cfg-label">' + esc(c.label) + '</div>' +
-          '<div class="app-cfg-key">' + esc(c.key) + '</div>' +
-          cfgControl(c) +
-          '<div class="app-cfg-note">' + esc(c.note || '') +
-          (range ? ' · 范围 ' + esc(range) : '') +
-          ' · 默认 ' + esc(c.default) + '</div>' +
-          '</div>';
-      }).join('');
+  function cfgFieldHtml(c) {
+    var range = (c.kind === 'float' || c.kind === 'int')
+      ? (c.min + ' ~ ' + c.max + (c.unit ? ' ' + c.unit : '')) : '';
+    return '<div class="app-cfg" data-cfgbox="' + esc(c.key) + '">' +
+      '<div class="app-cfg-label">' + esc(c.label) + '</div>' +
+      '<div class="app-cfg-key">' + esc(c.key) + '</div>' +
+      cfgControl(c) +
+      '<div class="app-cfg-note">' + esc(c.note || '') +
+      (range ? ' · 范围 ' + esc(range) : '') +
+      ' · 默认 ' + esc(c.default) + '</div>' +
+      '</div>';
+  }
 
-      grid.querySelectorAll('[data-cfg]').forEach(function (el) {
-        var mark = function () {
-          state.cfgDirty[el.dataset.cfg] = el.value;
-          var box = el.closest('.app-cfg');
-          if (box) box.classList.add('app-cfg-dirty');
-        };
-        el.addEventListener('input', mark);
-        el.addEventListener('change', mark);
-      });
-    }).catch(function (e) {
-      grid.innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
+  function bindCfgInputs(host, group) {
+    host.querySelectorAll('[data-cfg]').forEach(function (el) {
+      var mark = function () {
+        if (!state.cfgDirty[group]) state.cfgDirty[group] = {};
+        state.cfgDirty[group][el.dataset.cfg] = el.value;
+        var box = el.closest('.app-cfg');
+        if (box) box.classList.add('app-cfg-dirty');
+      };
+      el.addEventListener('input', mark);
+      el.addEventListener('change', mark);
     });
   }
 
-  function saveConfig() {
-    var keys = Object.keys(state.cfgDirty);
+  function loadCfgGroup(group, hostId, withCards) {
+    var host = $(hostId);
+    if (!host) return Promise.resolve();
+    host.innerHTML = '<div class="app-loading">加载中…</div>';
+    return api('/api/admin/settings?group=' + encodeURIComponent(group)).then(function (d) {
+      var items = d.items || [];
+      state.cfgByGroup[group] = items;
+      state.cfgDirty[group] = {};
+      if (!items.length) {
+        host.innerHTML = '<div class="app-loading">暂无可配置项</div>';
+        return;
+      }
+      if (!withCards) {
+        host.innerHTML = items.map(cfgFieldHtml).join('');
+      } else {
+        // 分区卡片：顺序由后端 GROUP_SECTIONS 决定，前端不另维护一份映射。
+        // 以后新增配置项只要在 runtime_config.py 里标好 section 就自动归位。
+        var sections = d.sections || [];
+        host.innerHTML = sections.map(function (sec) {
+          var secItems = items.filter(function (c) { return c.section === sec.key; });
+          if (!secItems.length) return '';
+          return '<div class="mdui-card app-card">' +
+            '<div class="app-card-head">' +
+              '<div class="app-card-title">' + esc(sec.label) +
+                '<span class="app-cfg-count">' + secItems.length + ' 项</span>' +
+              '</div>' +
+            '</div>' +
+            '<div class="app-card-body">' +
+              '<div class="app-cfg-grid">' + secItems.map(cfgFieldHtml).join('') + '</div>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+      }
+      bindCfgInputs(host, group);
+    }).catch(function (e) {
+      host.innerHTML = '<div class="app-error">' + esc(e.message) + '</div>';
+    });
+  }
+
+  function loadSystemCfg() { return loadCfgGroup('system', 'cfgGrid', false); }
+  function loadSimCfg() { return loadCfgGroup('sim', 'simCfgSections', true); }
+
+  function saveConfig(group) {
+    var dirty = state.cfgDirty[group] || {};
+    var keys = Object.keys(dirty);
     if (!keys.length) { notify('没有需要保存的修改'); return; }
+    var items = state.cfgByGroup[group] || [];
     var values = {};
     keys.forEach(function (key) {
-      var item = state.cfg.filter(function (c) { return c.key === key; })[0] || {};
-      var raw = state.cfgDirty[key];
+      var item = items.filter(function (c) { return c.key === key; })[0] || {};
+      var raw = dirty[key];
       if (item.kind === 'bool') values[key] = raw === 'true' || raw === true;
       else if (item.kind === 'int') values[key] = parseInt(raw, 10);
       else if (item.kind === 'float') values[key] = Number(raw);
       else values[key] = raw;
     });
-    api('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ values: values }) })
-      .then(function (d) {
-        var okN = (d.updated || []).length;
-        var bad = d.rejected || [];
-        notify(bad.length
-          ? '已保存 ' + okN + ' 项；' + bad.length + ' 项被拒绝：' +
-            bad.map(function (r) { return r.reason || r.key; }).join('；')
-          : '已保存 ' + okN + ' 项配置，已立即生效');
-        loadConfig();
-      })
-      .catch(function (e) { notify(e.message); });
+    // 带上 group：后端只接受本域的键，前端状态串了也改不到另一域
+    api('/api/admin/settings?group=' + encodeURIComponent(group), {
+      method: 'PUT', body: JSON.stringify({ values: values }),
+    }).then(function (d) {
+      var okN = (d.updated || []).length;
+      var bad = d.rejected || [];
+      notify(bad.length
+        ? '已保存 ' + okN + ' 项；' + bad.length + ' 项被拒绝：' +
+          bad.map(function (r) { return r.reason || r.key; }).join('；')
+        : '已保存 ' + okN + ' 项配置，已立即生效');
+      if (group === 'sim') loadSimCfg(); else loadSystemCfg();
+    }).catch(function (e) { notify(e.message); });
   }
 
-  function resetConfig() {
-    ask('确认把全部运行期配置恢复为代码默认值？', '恢复默认').then(function (ok) {
-      if (!ok) return;
-      return api('/api/admin/settings/reset', { method: 'POST' }).then(function () {
-        notify('已恢复默认配置');
-        loadConfig();
-      });
-    }).catch(function (e) { notify(e.message); });
+  function resetConfig(group) {
+    var label = group === 'sim' ? '模拟器配置' : '系统配置';
+    ask('确认把「' + label + '」恢复为默认值？另一域的配置不受影响。', '恢复默认')
+      .then(function (ok) {
+        if (!ok) return;
+        return api('/api/admin/settings/reset?group=' + encodeURIComponent(group),
+          { method: 'POST' }).then(function (d) {
+          notify('已恢复 ' + (d.count || 0) + ' 项默认值');
+          if (group === 'sim') loadSimCfg(); else loadSystemCfg();
+        });
+      }).catch(function (e) { notify(e.message); });
   }
 
   /* ------------------------------------------------------------ 数据初始化 */
@@ -1152,13 +1196,20 @@
     $('resetEngine').addEventListener('click', resetEngine);
 
     /* 配置 */
-    $('refreshCfg').addEventListener('click', loadConfig);
-    $('saveCfg').addEventListener('click', saveConfig);
-  var _saveEngineCfg = $('saveEngineCfg');
-  if (_saveEngineCfg) _saveEngineCfg.addEventListener('click', saveConfig);
-  var _resetEngineCfg = $('resetEngineCfg');
-  if (_resetEngineCfg) _resetEngineCfg.addEventListener('click', resetConfig);
-    $('resetCfg').addEventListener('click', resetConfig);
+  // 两页各自的按钮只作用于自己的域
+  var _refreshCfg = $('refreshCfg');
+  if (_refreshCfg) _refreshCfg.addEventListener('click', loadSystemCfg);
+  var _saveCfg = $('saveCfg');
+  if (_saveCfg) _saveCfg.addEventListener('click', function () { saveConfig('system'); });
+  var _resetCfg = $('resetCfg');
+  if (_resetCfg) _resetCfg.addEventListener('click', function () { resetConfig('system'); });
+
+  var _refreshSimCfg = $('refreshSimCfg');
+  if (_refreshSimCfg) _refreshSimCfg.addEventListener('click', loadSimCfg);
+  var _saveSimCfg = $('saveSimCfg');
+  if (_saveSimCfg) _saveSimCfg.addEventListener('click', function () { saveConfig('sim'); });
+  var _resetSimCfg = $('resetSimCfg');
+  if (_resetSimCfg) _resetSimCfg.addEventListener('click', function () { resetConfig('sim'); });
 
     /* 数据 */
     $('refreshSeed').addEventListener('click', loadSeedStatus);

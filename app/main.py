@@ -129,6 +129,7 @@ ADMIN_NAV = [
         "icon": "settings_backup_restore",
         "children": [
             {"key": "engine", "label": "模拟引擎", "icon": "settings_backup_restore"},
+            {"key": "simcfg", "label": "模拟器配置", "icon": "tune"},
             {"key": "data", "label": "数据初始化", "icon": "storage"},
         ],
     },

@@ -1,0 +1,19 @@
+<section class="app-page" id="page-simcfg">
+  <div class="app-page-head">
+    <div class="app-page-title">模拟器配置</div>
+    <div class="app-page-desc">
+      这个模拟股市的市场规则：行情引擎怎么跑、什么时候能交易、怎么结算、收多少费用、新账户发多少钱。
+      保存后立即生效，不影响系统配置里的安全开关。
+    </div>
+    <div class="app-toolbar">
+      <button class="mdui-btn mdui-ripple" id="refreshSimCfg">刷新</button>
+      <button class="mdui-btn mdui-ripple" id="resetSimCfg">恢复本页默认</button>
+      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="saveSimCfg">保存修改</button>
+    </div>
+  </div>
+
+  <!-- 分区渲染：行情引擎 → 交易时段 → 结算规则 → 交易费用 → 账户默认值。
+       顺序由后端的 GROUP_SECTIONS 决定，前端不另维护一份映射，
+       加了新配置项只在 runtime_config.py 里标注 section 即可自动归位。 -->
+  <div id="simCfgSections"></div>
+</section>

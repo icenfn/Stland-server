@@ -205,10 +205,40 @@ def _leaderboard(users: list[User], limit: int = 20) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # 运行期配置
 # --------------------------------------------------------------------------- #
+def _check_group(group: str) -> str:
+    """校验域参数，把非法值挡在业务之前。"""
+    if group not in runtime_config.GROUP_LABELS:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "BAD_GROUP",
+                "message": f"group 只接受 {'/'.join(runtime_config.GROUP_LABELS)}",
+            },
+        )
+    return group
+
+
 @router.get("/settings")
-def get_settings(admin: Admin = Depends(admin_user)) -> dict:
-    """全部可调配置项及其当前值（含类型、范围、说明，前端据此渲染表单）。"""
-    return {"items": runtime_config.snapshot()}
+def get_settings(
+    group: str = Query(default="", max_length=16),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """可调配置项及其当前值（含类型、范围、说明，前端据此渲染表单）。
+
+    传 `group` 只返回该域：后台「系统配置」拿 system、
+    「模拟器配置」拿 sim，各自页面不会出现对方域的项目。
+    不传时返回全部，保留给诊断与导出场景。
+    """
+    scope = _check_group(group) if group else None
+    return {
+        "items": runtime_config.snapshot(scope),
+        "group": scope,
+        "sections": runtime_config.sections_of(scope) if scope else [],
+        "groups": [
+            {"key": key, "label": label}
+            for key, label in runtime_config.GROUP_LABELS.items()
+        ],
+    }
 
 
 class SettingsIn(BaseModel):
@@ -220,19 +250,37 @@ class SettingsIn(BaseModel):
 @router.put("/settings")
 def put_settings(
     payload: SettingsIn,
+    group: str = Query(default="", max_length=16),
     session: Session = Depends(get_session),
     admin: Admin = Depends(admin_user),
 ) -> dict:
-    """修改运行期配置：校验通过后立即写到内存 settings，下一次请求即生效。"""
+    """修改运行期配置：校验通过后立即写到内存 settings，下一次请求即生效。
+
+    带 `group` 时只接受该域内的键。两个页面各自提交自己的表单，
+    这样即使前端状态串了（比如同时开着两个标签页），
+    在「模拟器配置」页保存也不可能顺手改掉「请求签名校验」这种系统开关。
+    """
     if not payload.values:
         raise HTTPException(400, detail={"code": "EMPTY", "message": "没有需要修改的配置"})
-    return runtime_config.update(session, payload.values, operator=admin.username)
+    scope = _check_group(group) if group else None
+    return runtime_config.update(
+        session, payload.values, operator=admin.username, group=scope
+    )
 
 
 @router.post("/settings/reset")
-def reset_settings(session: Session = Depends(get_session), admin: Admin = Depends(admin_user)) -> dict:
-    """恢复全部配置为代码默认值。"""
-    return runtime_config.reset_defaults(session, operator=admin.username)
+def reset_settings(
+    group: str = Query(default="", max_length=16),
+    session: Session = Depends(get_session),
+    admin: Admin = Depends(admin_user),
+) -> dict:
+    """恢复默认值。带 `group` 时只重置该域。
+
+    在「模拟器配置」页点恢复默认，不应把「请求签名校验」这类系统开关
+    一起重置 —— 那会让整个客户端因为签名被重新要求而整片报错。
+    """
+    scope = _check_group(group) if group else None
+    return runtime_config.reset_defaults(session, operator=admin.username, group=scope)
 
 
 # --------------------------------------------------------------------------- #
