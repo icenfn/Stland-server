@@ -31,7 +31,7 @@ from sqlmodel import select
 from ..config import settings
 from .book import Level, build_levels, clip, snap
 from ..db import session_scope
-from ..models import DailyBar, MinuteFrame, QuoteSnapshot, Stock
+from ..models import DailyBar, MinuteFrame, QuoteSnapshot, Stock, TradeSource
 from .session import current_session, trading_days
 
 # 一个「交易日」的模拟秒数：A 股 240 分钟。
@@ -76,6 +76,13 @@ class SecurityState:
     vol: float
     liquidity: float
     float_shares: float
+    # 当日「真实用户成交」的量与额，与 volume/amount 分开记：
+    # volume 里可能混着模拟引擎 tick 的随机量，而 real_* 只由
+    # apply_trade（用户撮合）累加。对外统计、日线落库、对账都用它，
+    # 这样模拟量再大也不会污染真实成交口径。
+    # 放在必填字段之后：dataclass 不允许默认值参数出现在必填参数之前。
+    real_volume: int = 0
+    real_amount: float = 0.0
     bids: list[Level] = field(default_factory=list)
     asks: list[Level] = field(default_factory=list)
     last_close_date: str = ""
@@ -197,10 +204,16 @@ class SecurityState:
         }
 
     def depth(self) -> dict:
+        """合成盘口：仅供「模拟引擎开着」时的兜底展示。
+
+        真实模式下前端不再调它（见 routers/market.py 的 /depth），
+        因为这里给出的是随机造出来的档位，不是任何人的真实挂单。
+        """
         return {
             "code": self.code,
             "bids": [{"price": l.price, "volume": l.volume} for l in self.bids],
             "asks": [{"price": l.price, "volume": l.volume} for l in self.asks],
+            "source": TradeSource.SIMULATED,
         }
 
     def apply_trade(self, price: float, quantity: int) -> None:
@@ -217,6 +230,8 @@ class SecurityState:
         self.price = float(price)
         self.high = max(self.high, price)
         self.low = min(self.low, price) if self.low > 0 else price
+        self.real_volume += int(quantity)
+        self.real_amount += float(price) * int(quantity)
         self.volume += qty
         self.amount = round(self.amount + price * qty, 2)
 
@@ -399,6 +414,9 @@ class MarketEngine:
                         "prev_close": snap(prev, st.tick_size),
                         "volume": vol,
                         "amount": round(vol * (o + close) / 2, 2),
+                        # 这些数字是随机游走造出来的，只为让图表有形状。
+                        # 必须标 backfill，否则会被当成用户真实成交历史。
+                        "source": TradeSource.BACKFILL,
                     }
                 )
                 prev = close
@@ -638,9 +656,10 @@ class MarketEngine:
                     continue
                 if st.trade_date == today:
                     continue
-                # 只有真的成交过才落一根日线，否则会写出一堆 OHLC 全等于昨收
-                # 的「没开过盘」的假K线，把图表拉成横向直线
-                if st.volume > 0:
+                # 判据用 real_volume 而不是 volume：模拟引擎 tick 也会累加
+                # volume，若拿它判，开着引擎时每天都会为每支标的多写一根
+                # 由随机量撑起来的假日线。real_volume 只由用户撮合累加。
+                if st.real_volume > 0:
                     closed.append(
                         {
                             "code": st.code,
@@ -650,8 +669,9 @@ class MarketEngine:
                             "low": st.low,
                             "close": st.price,
                             "prev_close": st.prev_close,
-                            "volume": int(st.volume),
-                            "amount": float(st.amount),
+                            "volume": int(st.real_volume),
+                            "amount": float(st.real_amount),
+                            "source": TradeSource.REAL,
                         }
                     )
                 st.prev_close = st.price
@@ -659,6 +679,8 @@ class MarketEngine:
                 st.price = st.open = st.high = st.low = st.prev_close
                 st.volume = 0
                 st.amount = 0.0
+                st.real_volume = 0
+                st.real_amount = 0.0
                 st.last_ret = 0.0
                 st.minute_bars.clear()
                 st.cur_minute = None
@@ -701,7 +723,10 @@ class MarketEngine:
         """
         with self._lock:
             st = self._states.get(code)
-            if st is None or st.volume <= 0:
+            # 用 real_volume 判断：开着模拟引擎时 tick 也会累加 volume，
+            # 拿 volume 判断会让「只有引擎随机量、无真实成交」的日子也画出
+            # 一根柱子，等于把模拟量当成今天的真实日线。
+            if st is None or st.real_volume <= 0:
                 return None
             return {
                 "time": st.trade_date or self._session_date(),
@@ -709,8 +734,8 @@ class MarketEngine:
                 "high": st.high or st.price,
                 "low": st.low or st.price,
                 "close": st.price,
-                "volume": int(st.volume),
-                "amount": round(float(st.amount), 2),
+                "volume": int(st.real_volume),
+                "amount": round(float(st.real_amount), 2),
             }
 
     def persist_quotes(self, force: bool = False) -> int:
@@ -735,8 +760,11 @@ class MarketEngine:
                     open=st.open,
                     high=st.high,
                     low=st.low,
-                    volume=int(st.volume),
-                    amount=float(st.amount),
+                    # 快照存「真实量优先」：有用户成交就记真实量并标 real，
+                    # 否则退回引擎量并标 simulated。恢复时据此区分口径。
+                    volume=int(st.real_volume or st.volume),
+                    amount=float(st.real_amount or st.amount),
+                    source=TradeSource.REAL if st.real_volume else TradeSource.SIMULATED,
                     updated_at=now,
                 )
                 for st in self._states.values()

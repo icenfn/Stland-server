@@ -12,10 +12,11 @@ from sqlmodel import Session, select
 
 from ..db import get_session
 from ..engine import index as index_engine
+from ..engine import orderbook
 from ..engine.market import market_engine
 from ..engine.periods import LONG_PERIODS, aggregate_daily
 from ..engine.session import current_session
-from ..models import DailyBar, Stock
+from ..models import DailyBar, Stock, TradeSource
 from ..services.deps import optional_signature
 
 router = APIRouter(prefix="/api/market", tags=["market"])
@@ -268,11 +269,43 @@ def index_kline(
 # 个股盘口 / 分时 / K 线
 # --------------------------------------------------------------------------- #
 @router.get("/depth/{code}")
-def depth(code: str) -> dict:
-    d = market_engine.depth(code)
-    if d is None:
+def depth(code: str, session: Session = Depends(get_session)) -> dict:
+    """五档盘口：默认只显示**真实用户挂单**。
+
+    原来这里直接返回 market_engine.depth()，那是 tick 里用随机数造出来的
+    档位 —— 前端看到的买卖五档没有任何一个用户真实挂过单。用户据此下单，
+    成交结果自然对不上，这才是「关掉引擎就露馅」的根因之一。
+
+    现在改为聚合 orderbook 里真实的 resting 委托：
+      · 买盘按价格从高到低，卖盘从低到高（与行情软件一致）；
+      · 没有挂单时返回空数组，前端显示「无挂单」而不是假档位；
+      · 仅当显式开启 hybrid（模拟做市商）时，才在空档位上补模拟盘口，
+        并标 source=simulated，让前端与调用方都能分辨。
+    """
+    quote = market_engine.quote(code)
+    if quote is None and not market_engine.has(code):
         raise HTTPException(404, detail={"code": "UNKNOWN_SYMBOL", "message": "标的不存在"})
-    return d
+
+    bids = orderbook.quote_levels(session, code, "buy", limit=5)
+    asks = orderbook.quote_levels(session, code, "sell", limit=5)
+    source = "real"
+
+    # 兼容演示盘：仅 hybrid 模式且真实档位为空时，补模拟盘口
+    from ..config import settings as _settings
+
+    if not bids and not asks and _settings.match_mode == "hybrid":
+        sim = market_engine.depth(code) or {}
+        bids = [{"price": l["price"], "volume": l["volume"]} for l in sim.get("bids", [])]
+        asks = [{"price": l["price"], "volume": l["volume"]} for l in sim.get("asks", [])]
+        source = "simulated"
+
+    return {
+        "code": code,
+        "bids": bids,
+        "asks": asks,
+        # 让调用方知道这份盘口是用户真实挂单还是模拟兜底，别再混着用
+        "source": source,
+    }
 
 
 @router.get("/minutes/{code}")
@@ -293,16 +326,22 @@ def kline(
         pattern="^(1min|5min|15min|30min|60min|120min|day|week|month|quarter|year)$",
     ),
     limit: int = Query(default=120, ge=10, le=500),
+    include_demo: bool = Query(
+        default=False,
+        description="是否包含模拟/回填数据。默认 false：只返回真实用户成交形成的 K 线",
+    ),
     session: Session = Depends(get_session),
 ) -> dict:
     # 周/月/季/年不落库：读日线后按自然周期聚合（纯函数，见 engine/periods.py），
     # 交易日历变化不需要回补历史，也不必多出四张要与日线对齐的冗余表
     if period in LONG_PERIODS:
+        stmt = select(DailyBar).where(DailyBar.code == code)
+        if not include_demo:
+            # 默认只给真实成交：初始化回填的随机日线与做市商成交量，
+            # 混进来的话图表形状是假的，指标（均线、涨幅）全不可信
+            stmt = stmt.where(DailyBar.source == TradeSource.REAL)
         rows = session.exec(
-            select(DailyBar)
-            .where(DailyBar.code == code)
-            .order_by(DailyBar.trade_date.desc())
-            .limit(limit * 40)
+            stmt.order_by(DailyBar.trade_date.desc()).limit(limit * 40)
         ).all()
         daily = [
             {
@@ -320,8 +359,11 @@ def kline(
         return {"code": code, "period": period, "items": aggregate_daily(daily, period)[-limit:]}
 
     if period == "day":
+        stmt = select(DailyBar).where(DailyBar.code == code)
+        if not include_demo:
+            stmt = stmt.where(DailyBar.source == TradeSource.REAL)
         rows = session.exec(
-            select(DailyBar).where(DailyBar.code == code).order_by(DailyBar.trade_date.desc()).limit(limit)
+            stmt.order_by(DailyBar.trade_date.desc()).limit(limit)
         ).all()
         items = [
             {

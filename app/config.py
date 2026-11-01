@@ -95,7 +95,11 @@ class Settings:
         # 撮合模式：book=只撮合用户订单簿（真实市场，无人接单就挂着）
         #           hybrid=先吃用户订单簿，剩余部分对做市商（原合成盘口）成交
         # 默认 hybrid 是为了让模拟盘保持原有手感；要跑「纯真实交易」应切 book。
-        self.match_mode: str = os.getenv("STLAND_MATCH_MODE", "hybrid")
+        # 默认 book：只撮合真实用户订单簿。
+        # 之前默认 hybrid —— 用户单吃不到对手时由做市商兜底成交，等于默认
+        # 打开了一台注水机：成交量里有相当部分是和引擎成交的，而非真实对手。
+        # 想做演示盘再显式 STLAND_MATCH_MODE=hybrid 打开。
+        self.match_mode: str = os.getenv("STLAND_MATCH_MODE", "book")
         # 休市日期：非周末的特殊休市日（法定节假日），JSON 日期数组。
         # 真实交易必须有交易日历 —— 假期里照常撮合、照常收单，模拟的
         # 时间和真实市场就对不上了。

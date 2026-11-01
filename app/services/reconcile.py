@@ -271,6 +271,31 @@ def check_cashflow_continuity(session: Session) -> list[Finding]:
     return out
 
 
+def check_real_trades_have_counterparty(session: Session) -> list[Finding]:
+    """真实（source=real）成交必须有真实对手方。
+
+    单列一条的理由：source 是人为打的标签，某个分支漏标一次，「和做市商
+    成交」的记录就会以 real 身份混进真实成交统计 —— 成交量、用户盈亏、
+    K 线全被一台注水机撑起来，而其余校验项照样通过。用「real 必须有
+    counterparty_user_id」把这种误标钉死。
+    """
+    from ..models import TradeSource
+
+    out: list[Finding] = []
+    rows = session.exec(select(Trade).where(Trade.source == TradeSource.REAL)).all()
+    for t in rows:
+        if not t.counterparty_user_id or not t.counterparty_order_id:
+            out.append(
+                Finding(
+                    "real_trade_without_counterparty", "error", f"trade:{t.trade_no}",
+                    f"成交 {t.trade_no} 标为真实但没有对手方用户/委托"
+                    f"（疑似与做市商成交却漏标 simulated）",
+                    trade_no=t.trade_no,
+                )
+            )
+    return out
+
+
 CHECKS = (
     check_order_fills,
     check_positions,
@@ -279,6 +304,7 @@ CHECKS = (
     check_trade_amounts,
     check_double_sided,
     check_cashflow_continuity,
+    check_real_trades_have_counterparty,
 )
 
 

@@ -23,6 +23,7 @@ from ..engine import orderbook, quote_source
 from ..engine.market import market_engine
 from ..engine.session import current_session
 from ..models import (
+    TradeSource,
     AccountStatus,
     CashFlow,
     Order,
@@ -311,6 +312,8 @@ def _settle_resting(
             tax=fee.stamp_tax,
             transfer_fee=fee.transfer_fee,
             realized_pnl=round_money(pnl),
+            # resting 为空 => 对手是做市商（合成盘口兜底）
+            source=(TradeSource.REAL if resting is not None else TradeSource.SIMULATED),
             created_at=time.time(),
         )
     )
@@ -481,6 +484,7 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
                 counterparty_user_id=(resting.user_id if resting is not None else None),
                 counterparty_order_id=(resting.id if resting is not None else None),
                 counterparty_order_no=(resting.order_no if resting is not None else ""),
+                source=(TradeSource.REAL if resting is not None else TradeSource.SIMULATED),
                 created_at=time.time(),
             )
         )

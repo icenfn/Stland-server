@@ -224,6 +224,27 @@ class Stock(SQLModel, table=True):
     liquidity: float = Field(default=1.0)     # 相对流动性（影响挂单深度）
 
 
+class TradeSource:
+    """成交/行情记录的来源标签。
+
+    为什么必须显式打标：模拟引擎、做市商兜底、初始化回填三者产出的数据，
+    与真实用户之间的成交在表结构上完全同形。一旦混在一起，就无法回答
+    「这个成交量是用户真买的，还是引擎随机生成的」——而这个问题决定了
+    对账、风控统计、K 线展示能不能算数。
+
+    · ``REAL``      真实用户之间的撮合（唯一可入账的口径）
+    · ``SIMULATED`` 模拟引擎 tick / 做市商兜底成交
+    · ``BACKFILL``  初始化时随机生成的历史日线，仅用于让图表有形状
+    """
+
+    REAL = "real"
+    SIMULATED = "simulated"
+    BACKFILL = "backfill"
+
+    #: 视为「真实发生」的口径集合，统计类查询默认只取它
+    TRUSTED = (REAL,)
+
+
 class DailyBar(SQLModel, table=True):
     """日线（含历史回填与实时合成），用于 K 线接口。"""
 
@@ -237,6 +258,10 @@ class DailyBar(SQLModel, table=True):
     prev_close: float = 0.0
     volume: int = 0
     amount: float = 0.0
+    # real / simulated / backfill，见 TradeSource。默认 backfill 而不是 real：
+    # 历史回填是本表最大的写入方，默认值选「最不信任」的那个才不会把假量
+    # 误标成真实成交。
+    source: str = Field(default=TradeSource.BACKFILL, index=True, max_length=12)
 
 
 class QuoteSnapshot(SQLModel, table=True):
@@ -261,6 +286,9 @@ class QuoteSnapshot(SQLModel, table=True):
     low: float = 0.0
     volume: int = 0
     amount: float = 0.0
+    # real / simulated，见 TradeSource。快照是「重启后恢复行情」的唯一依据，
+    # 必须记清这个价格/成交量是谁产生的，否则重启会把模拟量当成真实量。
+    source: str = Field(default=TradeSource.SIMULATED, index=True, max_length=12)
     updated_at: float = Field(default_factory=now_ts)
 
 
@@ -319,6 +347,9 @@ class Trade(SQLModel, table=True):
     counterparty_user_id: Optional[int] = Field(default=None, index=True)
     counterparty_order_id: Optional[int] = Field(default=None)
     counterparty_order_no: str = Field(default="", max_length=32)
+    # real / simulated，见 TradeSource。对账要求 source=real 的记录必须有
+    # 真实对手方；与做市商成交的一律 simulated，不参与真实盈亏统计。
+    source: str = Field(default=TradeSource.REAL, index=True, max_length=12)
     created_at: float = Field(default_factory=now_ts, index=True)
 
 

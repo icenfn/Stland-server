@@ -117,8 +117,12 @@ def test_roll_day_archives_yesterday_and_resets(stock):
     stock.open = 10.05
     stock.high = 10.90
     stock.low = 10.02
+    # roll_day 按 real_volume 判定「当日确有真实成交」，
+    # 因为 volume 里可能混着模拟 tick 的随机量
     stock.volume = 50000
     stock.amount = 530000.0
+    stock.real_volume = 50000
+    stock.real_amount = 530000.0
 
     market_engine.roll_day()
 
@@ -148,6 +152,8 @@ def test_roll_day_skips_days_without_trades(stock):
     """没成交过的一天不该写出一根水平假 K 线。"""
     stock.trade_date = "2026-10-29"
     stock.volume = 0
+    stock.real_volume = 0
+    stock.real_amount = 0.0
     market_engine.roll_day()
     with session_scope() as db:
         bars = db.exec(
@@ -161,6 +167,8 @@ def test_roll_day_is_idempotent_within_same_day(stock):
     """同一天重复调用只归档一次，不会重复写库。"""
     stock.trade_date = "2026-10-28"
     stock.volume = 1000
+    stock.real_volume = 1000
+    stock.real_amount = 10300.0
     stock.price = 10.30
     market_engine.roll_day()
     market_engine.roll_day()
