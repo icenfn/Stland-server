@@ -181,11 +181,10 @@ HMAC-SHA256(sign_secret, METHOD \n PATH \n TS \n NONCE \n SHA256(BODY) \n USER_I
 | `STLAND_TRANSFER_FEE_RATE` | `0.00001` | 过户费 |
 | `STLAND_TICK_SECONDS` | `1` | 行情推进一步间隔（秒） |
 | `STLAND_TRADE_MODE` | `t1` | 结算模式：`t1` / `t0` / `debug` |
-| `STLAND_SESSION_PRESET` | `a_share` | 时段预设：`a_share` / `us` / `custom` |
-| `STLAND_SESSION_SLOTS` | 空 | 自定义时段（`SESSION_PRESET=custom` 时生效） |
+| `STLAND_SESSION_SLOTS` | A股内置时段 | 交易时段 JSON 时段表（唯一来源，后台可一键填入 A股/美股 模板） |
 | `STLAND_MARKET_VOLATILITY` | `1.0` | 波动强度系数 |
 | `STLAND_MARKET_DRIFT` | `1.0` | 漂移强度系数 |
-| `STLAND_ENGINE_ENABLED` | `true` | 启动时是否拉起行情引擎 |
+| `STLAND_ENGINE_ENABLED` | `false` | 启动时是否推进行情（默认关闭，需在后台手动开启） |
 | `STLAND_FORCE_OPEN` | `false` | 忽略时段强制可交易（调试用） |
 
 完整示例见 [`.env.example`](.env.example)。

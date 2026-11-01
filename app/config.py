@@ -71,7 +71,9 @@ class Settings:
         # 兼容旧属性名，避免第三方脚本直接读 settings.session_mode 时报错
         self.session_mode: str = self.trade_mode
         self.force_open: bool = _bool("STLAND_FORCE_OPEN", False)
-        self.engine_enabled: bool = _bool("STLAND_ENGINE_ENABLED", True)
+        # 模拟引擎默认关闭：新部署启动后不自动推进行情，等管理员在
+        # 「模拟配置」里确认参数再手动打开，避免上线瞬间价格就开始乱跳。
+        self.engine_enabled: bool = _bool("STLAND_ENGINE_ENABLED", False)
 
 
 @lru_cache(maxsize=1)
