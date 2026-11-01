@@ -26,7 +26,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from .config import settings
-from .engine.session import parse_slots
+from .engine.session import parse_holidays, parse_slots
 from .models import Setting
 
 logger = logging.getLogger("stland.runtime_config")
@@ -51,6 +51,7 @@ GROUP_SECTIONS: dict[str, list[tuple[str, str]]] = {
         ("security", "安全与访问控制"),
         ("session", "交易时段"),
         ("settlement", "结算规则"),
+        ("risk", "委托风控"),
         ("fees", "交易费用"),
         ("account", "账户默认值"),
     ],
@@ -179,6 +180,15 @@ RUNTIME_SPECS: dict[str, Spec] = {
         group=GROUP_SYSTEM, section="session",
     ),
 
+    "holidays": Spec(
+        "holidays", "休市日期", "text", 
+        maximum=8000,
+        note='只登记**非法定节假日**的非周末休市日，周末由程序自动判定无需填写。'
+             '可点上方「A股 2026」按钮一键填入内置日历，也可自行编辑 JSON。'
+             '格式：["2026-01-01","2026-02-16"]；调试模式下本项失效',
+        group=GROUP_SYSTEM, section="session",
+    ),
+
     # ======================= 系统设置 · 结算规则 =======================
     "trade_mode": Spec(
         "trade_mode", "结算模式", "choice", 
@@ -190,6 +200,30 @@ RUNTIME_SPECS: dict[str, Spec] = {
         ),
         note="T+1/T+0 只改结算规则；调试模式下忽略全部交易时段设置，全天可申报可撮合，并按 T+0 结算",
         group=GROUP_SYSTEM, section="settlement",
+    ),
+
+    # ======================= 系统设置 · 委托风控 =======================
+    # 0 = 不限制。按账户类型分档，机构额度高一个量级。
+    "risk_max_order_retail": Spec(
+        "risk_max_order_retail", "零售单笔上限", "float", 
+        minimum=0.0, maximum=1e10, unit="元", note="0 表示不限制",
+        group=GROUP_SYSTEM, section="risk",
+    ),
+    "risk_daily_limit_retail": Spec(
+        "risk_daily_limit_retail", "零售单日上限", "float", 
+        minimum=0.0, maximum=1e11, unit="元",
+        note="按 已成交 + 在途委托 累计，0 表示不限制",
+        group=GROUP_SYSTEM, section="risk",
+    ),
+    "risk_max_order_institution": Spec(
+        "risk_max_order_institution", "机构单笔上限", "float", 
+        minimum=0.0, maximum=1e11, unit="元", note="0 表示不限制",
+        group=GROUP_SYSTEM, section="risk",
+    ),
+    "risk_daily_limit_institution": Spec(
+        "risk_daily_limit_institution", "机构单日上限", "float", 
+        minimum=0.0, maximum=1e12, unit="元", note="0 表示不限制",
+        group=GROUP_SYSTEM, section="risk",
     ),
 
     # ======================= 系统设置 · 交易费用 =======================
@@ -367,6 +401,14 @@ def update(
         except (ValueError, TypeError) as exc:
             rejected.append({"key": key, "reason": str(exc)})
             continue
+        if key == "holidays":
+            # 与时段表同理：解析不出来的日历不能落库。写错一天，
+            # 那一天就整天不能报单，比保存时直接拒绝难排查得多。
+            try:
+                parse_holidays(str(value or ""))
+            except ValueError as exc:
+                rejected.append({"key": key, "reason": str(exc)})
+                continue
         if key == "session_slots":
             # 时段表要能真的解析出时段才允许落库：否则存进去也只会走
             # 「解析失败回落 A 股」，运营以为改生效了实际没变。

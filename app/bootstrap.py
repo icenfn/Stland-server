@@ -22,6 +22,7 @@ from .engine.seed import SEED_BOARDS, SEED_STOCKS, SEED_USERS, LIMIT_BY_BOARD
 from .engine.session import current_session
 from .models import Admin, Board, DailyBar, Industry, Role, Stock, User
 from .security import hash_password
+from .services import reconcile
 from .services.trading import rematch_pending, settle_all
 
 # 新建库时回填的日线根数（约一年交易日）。
@@ -200,8 +201,13 @@ def ensure_history(session: Session) -> int:
     return added
 
 
-def register_engine() -> None:
-    """把库内标的注册到内存行情引擎。"""
+def register_engine(hydrate: bool = False) -> None:
+    """把库内标的注册到内存行情引擎。
+
+    ``hydrate=True`` 时接着从库内快照恢复价格与成交量：只在启动阶段用，
+    因为注册刚把状态清成初值，此时恢复才有意义。后台「初始化数据」
+    重复调用时保持 ``False``，避免把运行中的行情打回几秒前的快照。
+    """
     with Session(engine) as session:
         for s in session.exec(select(Stock)).all():
             market_engine.register(
@@ -216,6 +222,11 @@ def register_engine() -> None:
                 liquidity=s.liquidity,
                 float_shares=s.float_shares,
             )
+    if hydrate:
+        # 先恢复快照，再归档可能已跨日的昨日状态：
+        # 反过来会把恢复出来的「今天」也当成跨日清掉。
+        market_engine.hydrate()
+        market_engine.roll_day()
 
 
 def ensure_admin(session: Session) -> bool:
@@ -241,12 +252,50 @@ def ensure_admin(session: Session) -> bool:
     return True
 
 
+def startup_selfcheck() -> dict:
+    """启动自检：对账一遍，并把可以安全纠正的漂移修掉。
+
+    为什么在启动时做：崩溃/断电的痕迹（未退的冻结、没回写的持仓）只在
+    「上一次进程异常结束」时留下。放这里跑，等于每次上线都先把上次的残局
+    收拾干净再开门营业，而不是等用户发现钱不对才追查。
+
+    只自动修**可以证明是安全的**一类：``available = quantity - frozen``
+    这个等式本身就是 T+1 结算的定义，重算一遍不会改变任何真实持仓。
+    其余差异（成交金额、双边配对、冻结资金）只报不修 —— 自动改写真实金额
+    等于把「有人对不上账」这个事实抹掉，比留着差异危险得多。
+    """
+    summary = {"repaired": 0, "issues": 0, "errors": 0}
+    with session_scope() as session:
+        try:
+            # 幂等重放日终结算：修正可卖数量漂移
+            settle_all(session)
+        except Exception:  # noqa: BLE001 - 自检失败不能挡住启动
+            logger.exception("启动自检：日终结算重放失败")
+        try:
+            report = reconcile.run_all(session)
+        except Exception:  # noqa: BLE001
+            logger.exception("启动自检：对账失败")
+            return summary
+        summary["issues"] = report["counts"]["total"]
+        summary["errors"] = report["counts"]["error"]
+        if report["counts"]["total"]:
+            # 只记摘要不刷屏：逐条差异由后台 /reconcile 页面查看
+            logger.warning(
+                "启动自检发现 %d 项差异（其中 %d 项为错误级），详见后台对账页",
+                report["counts"]["total"], report["counts"]["error"],
+            )
+        for item in report["findings"]:
+            logger.info("对账差异 %s %s：%s", item["level"], item["subject"], item["detail"])
+    return summary
+
+
 def bootstrap() -> dict:
-    """冷启动：建表 + 加载配置 + 注册引擎 + 引导管理员，不写业务数据。"""
+    """冷启动：建表 + 加载配置 + 注册引擎 + 引导管理员 + 启动自检，不写业务数据。"""
     init_db()
     with session_scope() as session:
         runtime_config.load_overrides(session)
-    register_engine()
+    register_engine(hydrate=True)
+    selfcheck = startup_selfcheck()
     with session_scope() as session:
         ensure_admin(session)
         # 板块是标的规则的来源，必须先于任何标的写入存在
@@ -255,7 +304,13 @@ def bootstrap() -> dict:
         stocks = len(session.exec(select(Stock)).all())
         users = len(session.exec(select(User)).all())
         admins = len(session.exec(select(Admin)).all())
-    return {"stocks_total": stocks, "users_total": users, "admins_total": admins, "seeded": False}
+    return {
+        "stocks_total": stocks,
+        "users_total": users,
+        "admins_total": admins,
+        "seeded": False,
+        "selfcheck": selfcheck,
+    }
 
 
 def init_seed_data(include_stocks: bool = True, include_users: bool = True, include_history: bool = True) -> dict:
@@ -302,6 +357,13 @@ def _loop() -> None:
             if settings.engine_enabled:
                 market_engine.tick()
 
+            # 1b) 换日归档：把上一交易日收成日线并归零。
+            #     与 tick 无关 —— 关掉模拟引擎后新的一天照样要开始。
+            market_engine.roll_day()
+
+            # 1c) 行情快照落库（内部节流到 5 秒一次），保证重启后价格不倒退
+            market_engine.persist_quotes()
+
             # 2) 挂单重撮：价格变化后，之前挂着的限价单可能已经够得着了
             with session_scope() as session:
                 rematch_pending(session)
@@ -327,4 +389,9 @@ def start_engine() -> None:
 
 
 def stop_engine() -> None:
+    """停掉行情循环，并把最后一次行情状态落库。"""
     _stop.set()
+    try:
+        market_engine.persist_quotes(force=True)
+    except Exception:  # noqa: BLE001 - 退出路径上失败只损失最后一次快照
+        logger.exception("退出时保存行情快照失败")

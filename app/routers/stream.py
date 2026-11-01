@@ -26,6 +26,8 @@ from ..engine import index as index_engine
 from ..engine.market import market_engine
 from ..engine.session import current_session
 from ..models import Stock
+from ..security import TokenError, decode_token
+from ..services.events import hub
 
 router = APIRouter(tags=["stream"])
 
@@ -94,3 +96,53 @@ async def market_stream(ws: WebSocket) -> None:
         return
     except Exception:
         return
+
+
+@router.websocket("/ws/private")
+async def private_stream(ws: WebSocket) -> None:
+    """账户私有频道：委托状态变更与成交回报。
+
+    鉴权走 URL 查询参数 ``?token=<访问令牌>``：浏览器 WebSocket 构造函数
+    不能自定义请求头，Authorization 头这条路在浏览器里走不通，
+    查询参数是浏览器客户端唯一可用的载体。
+
+    只推「发生了什么」的轻量事件，不带金额与持仓明细 —— 事件丢了不影响正确性，
+    客户端收到后回查 REST 接口拿真值（见 services/events.py 的说明）。
+    """
+    token = ws.query_params.get("token", "")
+    user_id = 0
+    try:
+        payload = decode_token(token)
+        if payload.get("role") == "admin":
+            await ws.close(code=4403)
+            return
+        user_id = int(payload.get("sub", 0))
+    except (TokenError, ValueError):
+        # 在 accept 之前关闭会变成 HTTP 403；先 accept 再带码关闭，
+        # 客户端才能区分「令牌过期」与「服务不存在」并决定是否重登。
+        await ws.accept()
+        await ws.close(code=4401)
+        return
+    if not user_id:
+        await ws.accept()
+        await ws.close(code=4401)
+        return
+
+    await ws.accept()
+    queue = hub.subscribe(user_id)
+    try:
+        await ws.send_text(json.dumps({"type": "ready", "ts": int(time.time())}))
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=25.0)
+            except asyncio.TimeoutError:
+                # 心跳：私有频道平时可能长时间没有事件，中间设备会把静默连接掐掉
+                await ws.send_text(json.dumps({"type": "pong", "ts": int(time.time())}))
+                continue
+            await ws.send_text(json.dumps(event, ensure_ascii=False, default=str))
+    except WebSocketDisconnect:
+        return
+    except Exception:
+        return
+    finally:
+        hub.unsubscribe(user_id, queue)

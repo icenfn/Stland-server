@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 import random
 import threading
@@ -25,16 +26,20 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from sqlmodel import select
+
 from ..config import settings
 from .book import Level, build_levels, clip, snap
 from ..db import session_scope
-from ..models import MinuteFrame
+from ..models import DailyBar, MinuteFrame, QuoteSnapshot, Stock
 from .session import current_session, trading_days
 
 # 一个「交易日」的模拟秒数：A 股 240 分钟。
 # 所有波动率都换算成「每 tick 占一个交易日的比例」再做 sqrt 缩放，
 # 这样 tick_seconds 从 1 秒调到 5 秒、日波动率仍然稳定在设定水平上。
 DAY_SECONDS = 14400
+
+logger = logging.getLogger("stland.market")
 
 
 @dataclass
@@ -74,6 +79,12 @@ class SecurityState:
     bids: list[Level] = field(default_factory=list)
     asks: list[Level] = field(default_factory=list)
     last_close_date: str = ""
+    # 当前状态属于哪个交易日；跨日后据此把前一日收成日线再归零。
+    # 空串表示「还没走过日切」，首次 sync_day 只做归属、不算跨日。
+    trade_date: str = ""
+    # 涨跌幅上限（0.10 = ±10%）。日切换昨收后要靠它重算涨跌停价，
+    # 否则次日的涨停价还停在昨天的价格上，价格一到就被错误裁住。
+    limit_pct: float = 0.10
     minute_bars: deque[MinuteBar] = field(default_factory=lambda: deque(maxlen=1440))
     cur_minute: MinuteBar | None = None
     # 按自然日留存的分钟线，只服务「五日」视图。
@@ -236,6 +247,12 @@ class MarketEngine:
         self._segment: str = "continuous"
         self._session = None
         self.ready = False
+        # 快照落库节流：行情循环每秒转一圈，每圈都写一次库在标的数量上来后
+        # 会把 SQLite 写满。5 秒一次在「重启少丢几秒行情」和「写放大」之间够用了。
+        self._last_persist_ts: float = 0.0
+
+    # 快照落库的最小间隔（秒）
+    PERSIST_INTERVAL = 5.0
 
     # ------------------------------------------------------------------ #
     # 注册标的
@@ -276,6 +293,7 @@ class MarketEngine:
                 vol=vol,
                 liquidity=liquidity,
                 float_shares=float_shares,
+                limit_pct=limit_up_pct,
                 bids=bids,
                 asks=asks,
                 # 条件方差初值 = 日波动率² ÷ 一天 tick 数（即单 tick 方差）
@@ -521,6 +539,218 @@ class MarketEngine:
 
             self.ready = True
             return {c: s.quote() for c, s in self._states.items()}
+
+    # ------------------------------------------------------------------ #
+    # 持久化：启动水合 / 日切归档 / 快照落库
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _session_date(now: float | None = None) -> str:
+        return current_session(time.time() if now is None else now).trade_date
+
+    @staticmethod
+    def _resnap_limits(st: "SecurityState") -> None:
+        """按（新的）昨收与涨跌幅上限重算涨跌停价。
+
+        日切时昨收变了，涨跌停必须跟着走。不重算的话，今天的涨停价还是
+        昨天那个数 —— 次日高开后价格一路被「昨天的天花板」裁住，
+        看起来像行情坏了，其实是限价没换。
+        """
+        pct = st.limit_pct if st.limit_pct > 0 else 0.10
+        st.limit_up = snap(st.prev_close * (1 + pct), st.tick_size)
+        st.limit_down = snap(st.prev_close * (1 - pct), st.tick_size)
+
+    def hydrate(self) -> int:
+        """从库内快照恢复行情状态，返回恢复的标的数。
+
+        两种情形分开处理：
+          · 快照就是今天的 → 原样恢复（重启不该丢掉当天已经走出来的行情）；
+          · 快照是更早交易日的 → 只取它的收盘价当昨收，今日 OHLC 与成交归零
+            （隔夜重启相当于新的一天，把昨天的成交量算进今天会让量比失真）。
+        """
+        today = self._session_date()
+        try:
+            with session_scope() as db:
+                # 必须在会话内把行转成普通 dict：会话一关，ORM 对象的属性就
+                # 过期了，出到外面再读会抛 DetachedInstanceError。
+                rows = {
+                    r.code: {
+                        "trade_date": r.trade_date,
+                        "prev_close": r.prev_close,
+                        "price": r.price,
+                        "open": r.open,
+                        "high": r.high,
+                        "low": r.low,
+                        "volume": int(r.volume),
+                        "amount": float(r.amount),
+                    }
+                    for r in db.exec(select(QuoteSnapshot)).all()
+                }
+        except Exception:  # noqa: BLE001 - 读不到快照就按初值跑，不能挡住启动
+            logger.exception("读取行情快照失败，按初始值启动")
+            return 0
+
+        restored = 0
+        with self._lock:
+            for code, st in self._states.items():
+                row = rows.get(code)
+                if row is None:
+                    st.trade_date = today
+                    continue
+                if row["trade_date"] == today and row["price"] > 0:
+                    st.prev_close = row["prev_close"] or st.prev_close
+                    st.price = row["price"]
+                    st.open = row["open"] or row["price"]
+                    st.high = row["high"] or row["price"]
+                    st.low = row["low"] or row["price"]
+                    st.volume = row["volume"]
+                    st.amount = row["amount"]
+                else:
+                    # 更早的交易日：用收盘价做今天的昨收，其余归零
+                    close = row["price"] or row["prev_close"]
+                    if close <= 0:
+                        st.trade_date = today
+                        continue
+                    st.prev_close = close
+                    st.price = st.open = st.high = st.low = close
+                    st.volume = 0
+                    st.amount = 0.0
+                st.trade_date = today
+                st.last_ret = 0.0
+                self._resnap_limits(st)
+                self._refresh_depth(st, self._rng)
+                restored += 1
+        if restored:
+            logger.info("已从快照恢复 %d 支标的的行情状态", restored)
+        return restored
+
+    def roll_day(self) -> list[dict]:
+        """跨交易日时把上一日收成日线并归零，返回已归档的日线行。
+
+        为什么要在引擎里做：昨收只能从「上一日收盘价」来。外部行情源接入后
+        由 feeder 决定价格，但换日和归零仍得有人负责，放在引擎里与数据来源无关。
+        """
+        today = self._session_date()
+        closed: list[dict] = []
+        with self._lock:
+            for st in self._states.values():
+                if not st.trade_date:
+                    st.trade_date = today
+                    continue
+                if st.trade_date == today:
+                    continue
+                # 只有真的成交过才落一根日线，否则会写出一堆 OHLC 全等于昨收
+                # 的「没开过盘」的假K线，把图表拉成横向直线
+                if st.volume > 0:
+                    closed.append(
+                        {
+                            "code": st.code,
+                            "trade_date": st.trade_date,
+                            "open": st.open,
+                            "high": st.high,
+                            "low": st.low,
+                            "close": st.price,
+                            "prev_close": st.prev_close,
+                            "volume": int(st.volume),
+                            "amount": float(st.amount),
+                        }
+                    )
+                st.prev_close = st.price
+                st.trade_date = today
+                st.price = st.open = st.high = st.low = st.prev_close
+                st.volume = 0
+                st.amount = 0.0
+                st.last_ret = 0.0
+                st.minute_bars.clear()
+                st.cur_minute = None
+                st.day_frames.clear()
+                self._resnap_limits(st)
+                self._refresh_depth(st, self._rng)
+
+        if closed:
+            self._write_daily(closed)
+        return closed
+
+    @staticmethod
+    def _write_daily(rows: list[dict]) -> None:
+        """把归档日线写进 ``daily_bar``（同 code+date 覆盖，不产生重复行）。"""
+        try:
+            with session_scope() as db:
+                for row in rows:
+                    hit = db.exec(
+                        select(DailyBar)
+                        .where(DailyBar.code == row["code"])
+                        .where(DailyBar.trade_date == row["trade_date"])
+                    ).first()
+                    if hit is None:
+                        db.add(DailyBar(**row))
+                    else:
+                        for key, val in row.items():
+                            setattr(hit, key, val)
+                        db.add(hit)
+        except Exception:  # noqa: BLE001 - 日线归档失败不能打断行情循环
+            logger.exception("归档日线失败")
+
+    def today_bar(self, code: str) -> dict | None:
+        """当前交易日的实时日线（尚未落库的那一根）。
+
+        ``roll_day`` 只在跨日时写库，所以「今天」这根日线在收盘前一直不存在。
+        日线/周线/月线图若不补它，用户当天成交了却看不到今天的 K 线 ——
+        图停在昨天，看起来像行情没跟上交易。
+
+        没有任何成交时返回 ``None``：开盘前不该先画一根 OHLC 全等于昨收的柱子。
+        """
+        with self._lock:
+            st = self._states.get(code)
+            if st is None or st.volume <= 0:
+                return None
+            return {
+                "time": st.trade_date or self._session_date(),
+                "open": st.open or st.price,
+                "high": st.high or st.price,
+                "low": st.low or st.price,
+                "close": st.price,
+                "volume": int(st.volume),
+                "amount": round(float(st.amount), 2),
+            }
+
+    def persist_quotes(self, force: bool = False) -> int:
+        """把当前行情状态落库（节流）。返回写入的标的数。
+
+        先在锁内拍快照，出锁再写库：写库可能上百毫秒，占着引擎锁会让
+        所有读行情的请求排队，盘口页面直接卡住。
+        """
+        now = time.time()
+        if not force and now - self._last_persist_ts < self.PERSIST_INTERVAL:
+            return 0
+        self._last_persist_ts = now
+
+        with self._lock:
+            today = self._session_date(now)
+            rows = [
+                QuoteSnapshot(
+                    code=st.code,
+                    trade_date=st.trade_date or today,
+                    prev_close=st.prev_close,
+                    price=st.price,
+                    open=st.open,
+                    high=st.high,
+                    low=st.low,
+                    volume=int(st.volume),
+                    amount=float(st.amount),
+                    updated_at=now,
+                )
+                for st in self._states.values()
+            ]
+        if not rows:
+            return 0
+        try:
+            with session_scope() as db:
+                for row in rows:
+                    db.merge(row)
+        except Exception:  # noqa: BLE001 - 快照落库失败只影响重启恢复，不能打断循环
+            logger.exception("行情快照落库失败")
+            return 0
+        return len(rows)
 
     # ------------------------------------------------------------------ #
     # 读取

@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -27,6 +28,7 @@ from .config import settings
 from .engine.session import current_session
 from .routers import account, admin, auth, market, stream, trade, watch
 from .services import admin_session
+from .services.events import hub
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +39,8 @@ logger = logging.getLogger("stland")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 私有事件从工作线程投递到本循环，先把它绑上（见 services/events.py）
+    hub.bind_loop(asyncio.get_running_loop())
     info = bootstrap()
     logger.info("Stland 启动完成：%s", info)
     start_engine()

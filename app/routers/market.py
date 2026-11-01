@@ -21,6 +21,46 @@ from ..services.deps import optional_signature
 router = APIRouter(prefix="/api/market", tags=["market"])
 
 
+def _with_today(code: str, daily: list[dict]) -> list[dict]:
+    """把「今天」这根实时日线接到日线序列末尾。
+
+    ``daily_bar`` 只在跨日时落库，所以收盘前今天的柱子并不在库里。
+    不补它，用户当天成交了却看不到今天的 K 线 —— 图停在昨天，
+    看起来像行情没跟上交易。已经落库过（同一交易日）就不重复追加。
+    """
+    bar = market_engine.today_bar(code)
+    if bar is None:
+        return daily
+    if daily and daily[-1].get("time") == bar["time"]:
+        daily[-1] = bar
+        return daily
+    return daily + [bar]
+
+
+def _with_index_today(quote: dict, daily: list[dict]) -> list[dict]:
+    """给指数日线补上当日这根实时柱。
+
+    指数点位由成分实时合成，收盘前同样不存在于 ``daily_bar``（它存的是个股日线）。
+    统一在接口层补，指数与个股的日线口径就一致了。
+    """
+    if not quote.get("has_data") or not quote.get("price"):
+        return daily
+    today = current_session().trade_date
+    bar = {
+        "time": today,
+        "open": quote.get("open") or quote["price"],
+        "high": quote.get("high") or quote["price"],
+        "low": quote.get("low") or quote["price"],
+        "close": quote["price"],
+        "volume": int(quote.get("volume") or 0),
+        "amount": round(float(quote.get("amount") or 0.0), 2),
+    }
+    if daily and daily[-1].get("time") == today:
+        daily[-1] = bar
+        return daily
+    return daily + [bar]
+
+
 @router.get("/overview")
 def overview(_: None = Depends(optional_signature), session: Session = Depends(get_session)) -> dict:
     """首页聚合：指数、涨跌分布、榜单、交易时段。"""
@@ -203,13 +243,19 @@ def index_kline(
     meta = index_engine.get_index(code)
     # 周/月/季/年：取日线后按自然周期聚合，不必给指数单独维护长周期表
     if period in LONG_PERIODS:
-        daily = index_engine.index_daily(session, meta, limit=limit * 40)
+        daily = _with_index_today(
+            index_engine.index_quote(session, meta),
+            index_engine.index_daily(session, meta, limit=limit * 40),
+        )
         if not daily:
             daily = index_engine.index_kline(session, meta, period="60min", limit=limit)
         return {"code": meta.code, "period": period, "items": aggregate_daily(daily, period)[-limit:]}
 
     if period == "day":
-        items = index_engine.index_daily(session, meta, limit=limit)
+        items = _with_index_today(
+            index_engine.index_quote(session, meta),
+            index_engine.index_daily(session, meta, limit=limit),
+        )
         if not items:
             # 历史日线还没回填时退回分钟聚合，保证图不是空的
             items = index_engine.index_kline(session, meta, period="60min", limit=limit)
@@ -270,6 +316,7 @@ def kline(
             }
             for r in reversed(rows)
         ]
+        daily = _with_today(code, daily)
         return {"code": code, "period": period, "items": aggregate_daily(daily, period)[-limit:]}
 
     if period == "day":
@@ -288,7 +335,7 @@ def kline(
             }
             for r in reversed(rows)
         ]
-        return {"code": code, "period": period, "items": items}
+        return {"code": code, "period": period, "items": _with_today(code, items)[-limit:]}
 
     items = market_engine.kline(code, period)
     return {"code": code, "period": period, "items": items[-limit:]}

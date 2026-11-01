@@ -23,6 +23,11 @@ DEFAULT_SESSION_SLOTS = (
 )
 
 
+#: 休市日期的默认值：空数组。周末由代码判定，无需登记；法定节假日由运营
+#: 按年维护（后台有一键填入 A 股当年节假日 的按钮）。
+DEFAULT_HOLIDAYS = "[]"
+
+
 class Settings:
     """运行期配置（不可变语义，启动时一次性读取）。"""
 
@@ -55,6 +60,15 @@ class Settings:
         self.stamp_tax_rate: float = float(os.getenv("STLAND_STAMP_TAX_RATE", "0.0005"))
         self.transfer_fee_rate: float = float(os.getenv("STLAND_TRANSFER_FEE_RATE", "0.00001"))
 
+        # ---- 委托风控 ----
+        # 单笔 / 单日金额上限，按账户类型分档（单位：元，0 表示不限制）。
+        # 分档而不是共用一个阈值：机构的下单规模天然比零售大一个量级，
+        # 共用阈值要么卡死机构，要么放过零售。
+        self.risk_max_order_retail: float = float(os.getenv("STLAND_RISK_MAX_ORDER_RETAIL", "200000"))
+        self.risk_daily_limit_retail: float = float(os.getenv("STLAND_RISK_DAILY_LIMIT_RETAIL", "2000000"))
+        self.risk_max_order_institution: float = float(os.getenv("STLAND_RISK_MAX_ORDER_INSTITUTION", "5000000"))
+        self.risk_daily_limit_institution: float = float(os.getenv("STLAND_RISK_DAILY_LIMIT_INSTITUTION", "50000000"))
+
         # ---- 撮合 / 模拟引擎 ----
         self.tick_seconds: float = float(os.getenv("STLAND_TICK_SECONDS", "1"))
         # 交易模式：a_share=A股（默认，含集合竞价）/ us=美股 / continuous=24h 连续竞价
@@ -82,6 +96,10 @@ class Settings:
         #           hybrid=先吃用户订单簿，剩余部分对做市商（原合成盘口）成交
         # 默认 hybrid 是为了让模拟盘保持原有手感；要跑「纯真实交易」应切 book。
         self.match_mode: str = os.getenv("STLAND_MATCH_MODE", "hybrid")
+        # 休市日期：非周末的特殊休市日（法定节假日），JSON 日期数组。
+        # 真实交易必须有交易日历 —— 假期里照常撮合、照常收单，模拟的
+        # 时间和真实市场就对不上了。
+        self.holidays: str = os.getenv("STLAND_HOLIDAYS", DEFAULT_HOLIDAYS)
 
 
 @lru_cache(maxsize=1)

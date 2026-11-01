@@ -1027,14 +1027,22 @@
       // 一张时段表有七八段，单行框里改 JSON 基本没法编辑。
       // 上方给几个内置模板按钮，点一下就把模板填进框里再由运营自己改；
       // 保存的始终是这张表本身，不存在「预设」这个独立状态。
+      // 多行 JSON 文本项（交易时段 / 休市日期）都配一组模板按钮：
+      // 点一下把模板填进框里再自行修改，保存的始终是框里的文本本身。
+      // 模板数据由后端下发，前端不硬编码时间表或节假日表。
+      var fillCfg = {
+        session_slots: { presets: state.slotPresets, hint: '点击填入内置时段模板' },
+        holidays: { presets: state.holidayPresets, hint: '点击填入内置休市日历' }
+      }[c.key];
       var fills = '';
-      if (c.key === 'session_slots') {
+      if (fillCfg) {
         fills = '<div class="app-cfg-fill">' +
-          (state.slotPresets || []).map(function (p) {
+          (fillCfg.presets || []).map(function (p) {
             return '<button type="button" class="mdui-btn mdui-ripple app-fill-btn" ' +
-              'data-fill-preset="' + esc(p.key) + '">' + esc(p.label) + '</button>';
+              'data-fill-preset="' + esc(p.key) + '" data-fill-target="' + esc(c.key) + '">' +
+              esc(p.label) + '</button>';
           }).join('') +
-          '<span class="app-fill-hint">点击填入内置时段模板</span></div>';
+          '<span class="app-fill-hint">' + esc(fillCfg.hint) + '</span></div>';
       }
       return fills + '<textarea class="app-select app-textarea" rows="10" ' + key + '>' +
         esc(String(c.value == null ? '' : c.value)) + '</textarea>';
@@ -1064,15 +1072,17 @@
     // 让运营能直接保存，也还能在填入后继续手改。
     // 用 dispatchEvent 触发一次 input，让下面统一注册的 mark 处理器接管
     // 「记入待保存值 + 高亮」这件事，按钮自己不再重复维护状态。
-    var slotsEl = host.querySelector('[data-cfg="session_slots"]');
     host.querySelectorAll('[data-fill-preset]').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        if (!slotsEl) return;
+        var targetKey = btn.dataset.fillTarget || 'session_slots';
+        var el = host.querySelector('[data-cfg="' + targetKey + '"]');
+        if (!el) return;
+        var pool = targetKey === 'holidays' ? (state.holidayPresets || []) : (state.slotPresets || []);
         var key = btn.dataset.fillPreset;
-        var hit = (state.slotPresets || []).filter(function (p) { return p.key === key; })[0];
+        var hit = pool.filter(function (p) { return p.key === key; })[0];
         if (!hit) return;
-        slotsEl.value = hit.json;
-        slotsEl.dispatchEvent(new Event('input', { bubbles: true }));
+        el.value = hit.json;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
       });
     });
     host.querySelectorAll('[data-cfg]').forEach(function (el) {
@@ -1097,6 +1107,7 @@
       state.cfgDirty[group] = {};
       // 时段模板由后端下发（session.py 的 PRESETS），前端不硬编码时间表
       state.slotPresets = d.slot_presets || [];
+      state.holidayPresets = d.holiday_presets || [];
       if (!items.length) {
         host.innerHTML = '<div class="app-loading">暂无可配置项</div>';
         return;

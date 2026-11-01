@@ -25,8 +25,10 @@ from ..engine import index as index_engine
 from ..engine.market import market_engine
 from ..engine.session import (
     FILLABLE_PRESETS,
+    HOLIDAY_PRESETS,
     PRESETS,
     current_session,
+    holiday_preset_json,
     preset_slots_json,
 )
 from ..models import (
@@ -47,7 +49,7 @@ from ..models import (
     WatchItem,
 )
 from ..security import hash_password, verify_password
-from ..services import admin_session
+from ..services import admin_session, reconcile
 from ..services.deps import admin_user, issue_admin_token
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -249,6 +251,12 @@ def get_settings(
         "slot_presets": [
             {"key": key, "label": PRESETS[key]["label"], "json": preset_slots_json(key)}
             for key in FILLABLE_PRESETS
+        ],
+        # 「休市日期」上方的填充按钮，同样由后端出模板（session.py 的
+        # HOLIDAY_PRESETS），前端不另抄一份节假日表。
+        "holiday_presets": [
+            {"key": key, "label": conf["label"], "json": holiday_preset_json(key)}
+            for key, conf in HOLIDAY_PRESETS.items()
         ],
     }
 
@@ -1075,6 +1083,18 @@ class EngineControlIn(BaseModel):
     """引擎开关请求体。"""
 
     enabled: bool
+
+
+@router.get("/reconcile")
+def reconcile_report(
+    session: Session = Depends(get_session), admin: Admin = Depends(admin_user)
+) -> dict:
+    """账务对账：把订单/成交/持仓/资金相互校验。
+
+    只读接口，不改任何数据 —— 对账的第一步是「看清楚哪里不对」，
+    自动修复必须由人确认后再做，否则会把真实差异抹平成看似一致的假账。
+    """
+    return reconcile.run_all(session)
 
 
 @router.get("/engine")

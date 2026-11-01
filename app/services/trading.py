@@ -12,6 +12,7 @@ T+1 规则：当日买入的股票要到下一交易日才能卖出，故持仓�
 from __future__ import annotations
 
 import secrets
+import logging
 import time
 from datetime import datetime
 
@@ -33,6 +34,10 @@ from ..models import (
     Trade,
     User,
 )
+from . import risk
+from .events import hub, order_event
+
+logger = logging.getLogger("stland.trading")
 from .fees import calc_fee, max_buy_quantity, resolve_commission, round_money
 
 
@@ -150,6 +155,14 @@ def place_order(
     if side_enum == OrderSide.SELL and last_price <= stock.limit_down + 1e-9:
         raise TradeError("该标的已跌停，暂时无法卖出", "LIMIT_DOWN")
 
+    # ---- 风控限额 ----
+    # 放在冻结之前：额度不够就不该先把钱冻上再回滚，冻结-解冻本身要写流水，
+    # 白记两条账比直接拒绝代价大得多。
+    try:
+        risk.check_order(session, user, price=price, quantity=quantity)
+    except risk.RiskError as exc:
+        raise TradeError(str(exc), exc.code) from exc
+
     # ---- 冻结 ----
     frozen_amount = 0.0
     if side_enum == OrderSide.BUY:
@@ -199,6 +212,12 @@ def place_order(
     _match_order(session, user, order, stock, quote)
     session.commit()
     session.refresh(order)
+    # 下单这一笔的结果也要推：客户端看到「部分成交」才知道还剩多少挂在盘上，
+    # 否则它会以为整笔都成交了。
+    hub.publish(
+        user.id or 0,
+        order_event(order, "filled" if order.filled_quantity else "accepted"),
+    )
     return order
 
 
@@ -308,6 +327,19 @@ def _settle_resting(
     resting.status = OrderStatus.FILLED if filled >= resting.quantity else OrderStatus.PARTIAL
     resting.updated_at = time.time()
     session.add(resting)
+
+    # 被动成交的账户完全不知道自己的挂单被吃掉了 —— 它的下单请求早就返回了。
+    # 这条事件是它唯一的实时感知途径。
+    hub.publish(
+        other.id or 0,
+        order_event(
+            resting,
+            "filled" if resting.status == OrderStatus.FILLED else "partial",
+            trigger="passive",
+            last_price=price,
+            last_quantity=quantity,
+        ),
+    )
 
 
 def _match_order(session: Session, user: User, order: Order, stock: Stock, quote: dict) -> None:
@@ -548,20 +580,28 @@ def rematch_pending(session: Session) -> int:
     if not current_session().can_trade:
         return 0
 
-    orders = session.exec(
-        select(Order).where(
-            Order.status.in_([OrderStatus.PENDING, OrderStatus.PARTIAL]),
-            Order.order_type == OrderType.LIMIT,
-        )
-    ).all()
+    # 只捞出「还有量可撮」的委托：部分成交且已满量的单子状态可能还是 PARTIAL，
+    # 但剩余为 0，扫进来只是白白多一轮查询与撮合。
+    orders = [
+        o for o in session.exec(
+            select(Order).where(
+                Order.status.in_([OrderStatus.PENDING, OrderStatus.PARTIAL]),
+                Order.order_type == OrderType.LIMIT,
+            )
+        ).all()
+        if int(o.quantity) - int(o.filled_quantity or 0) > 0
+    ]
     if not orders:
         return 0
 
     filled_orders = 0
     mode = match_mode()
+    # 行情源对象在循环外取一次：每单都重建一次纯属浪费，
+    # 且同一批次内换源会让前后两单看到不同的盘口。
+    source = quote_source.get_source()
     for order in orders:
         try:
-            quote = quote_source.get_source().quote_any(order.code)
+            quote = source.quote_any(order.code)
             stock = session.get(Stock, order.code)
             user = session.get(User, order.user_id)
             if stock is None or user is None:
@@ -582,9 +622,13 @@ def rematch_pending(session: Session) -> int:
 
             before = order.filled_quantity
             _match_order(session, user, order, stock, quote)
-            session.commit()
             if order.filled_quantity > before:
+                # 只有真的成交才提交：没成交却每单一提交，等于行情循环每转一圈
+                # 就写一遍库，在途单一多就把 SQLite 压满。
+                session.commit()
                 filled_orders += 1
+            else:
+                session.rollback()
         except Exception:  # 单笔异常不能拖垮整个再撮合批次
             session.rollback()
             continue
@@ -623,6 +667,7 @@ def cancel_order(session: Session, user: User, order_id: int) -> Order:
     session.add(order)
     session.commit()
     session.refresh(order)
+    hub.publish(user.id or 0, order_event(order, "cancelled"))
     return order
 
 
@@ -658,7 +703,21 @@ def settle_all(session: Session) -> None:
     换句话说，日切永远做「可卖 = 总持仓 − 冻结」的全量重算，是幂等且安全的；
     T+0 与 T+1 的差别只体现在「买入当天」而不是日切。
     """
+    fixed = 0
+    broken = 0
     for pos in session.exec(select(Position)).all():
-        pos.available = max(0, pos.quantity - pos.frozen)
-        session.add(pos)
-    session.commit()
+        try:
+            target = max(0, pos.quantity - pos.frozen)
+            if pos.available != target:
+                pos.available = target
+                session.add(pos)
+                fixed += 1
+            # 逐条提交：一条脏数据抛错时回滚只影响它自己，
+            # 不会把已处理好的持仓一起回退。
+            session.commit()
+        except Exception:  # noqa: BLE001 - 单个持仓异常不能拖垮日终结算
+            session.rollback()
+            broken += 1
+            logger.exception("日终结算失败：position id=%s", getattr(pos, "id", None))
+    if fixed or broken:
+        logger.info("日终结算：修正 %d 条持仓，跳过 %d 条异常", fixed, broken)

@@ -44,7 +44,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from datetime import datetime, time as dtime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 
 from ..config import settings
 
@@ -206,6 +206,105 @@ PRESETS: dict[str, dict] = {
 #: 可一键填入的预设（后台「交易时段」上方的按钮就按这个顺序渲染）。
 #: 注意：预设不再是「运行模式」，只是给运营省去手写 JSON 的模板。
 FILLABLE_PRESETS: tuple[str, ...] = ("a_share", "us")
+
+#: 休市日历模板（后台「休市日期」上方的一键填入按钮）。
+#: 只列**非周末**的法定休市日：周六/周日本来就休市，重复登记会让列表
+#: 里塞满日期，运营看不出哪些才是真正需要关注的节假日。
+#: 数据来源：上交所《关于上海证券交易所 2026 年部分节假日休市安排的通知》
+#: （上证公告〔2025〕45 号）—— 元旦 1/1-1/3、春节 2/15-2/23、清明 4/4-4/6、
+#: 劳动节 5/1-5/5、端午 6/19-6/21、中秋 9/25-9/27、国庆 10/1-10/7，
+#: 其中落在周末的日期已剔除。
+HOLIDAY_PRESETS: dict[str, dict] = {
+    "a_share_2026": {
+        "label": "A股 2026",
+        "dates": [
+            "2026-01-01", "2026-01-02",                                # 元旦
+            "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19",
+            "2026-02-20", "2026-02-23",                                # 春节
+            "2026-04-06",                                              # 清明
+            "2026-05-01", "2026-05-04", "2026-05-05",                  # 劳动节
+            "2026-06-19",                                              # 端午
+            "2026-09-25",                                              # 中秋
+            "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06",
+            "2026-10-07",                                              # 国庆
+        ],
+    },
+}
+
+
+def holiday_preset_json(key: str) -> str:
+    """把内置休市日历导出成 JSON 文本，供后台按钮一键填入。"""
+    conf = HOLIDAY_PRESETS.get(key) or {}
+    return json.dumps(list(conf.get("dates") or []), ensure_ascii=False, indent=2)
+
+
+def parse_holidays(raw: str | None) -> set[str]:
+    """把 ``holidays`` 的 JSON 文本解析成休市日期集合。
+
+    格式（日期字符串数组，``YYYY-MM-DD``）：``["2026-01-01", "2026-02-16"]``。
+    空串 / 空数组返回空集合。解析失败抛 ValueError，由配置层转成「拒绝保存」——
+    日历写错一天，整天都不能报单，比拒绝保存更难排查。
+    落在周末的日期会被丢掉：周末本来就休市，留着只是噪音。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return set()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"休市日期不是合法 JSON：{exc.msg}") from exc
+    if not isinstance(data, list):
+        raise ValueError('休市日期应为 JSON 数组，例如 ["2026-01-01"]')
+
+    dates: set[str] = set()
+    for item in data:
+        try:
+            day = date.fromisoformat(str(item).strip())
+        except ValueError as exc:
+            raise ValueError(f"日期格式应为 YYYY-MM-DD，收到 {item!r}") from exc
+        if day.weekday() >= 5:
+            continue
+        dates.add(day.isoformat())
+    return dates
+
+
+# 每个 tick 都会问一次「今天休不休市」，而 parse_holidays 要跑 json.loads。
+# 用最近一次的原文做缓存，配置一改原文就变，缓存自然失效。
+_HOLIDAY_CACHE: dict[str, frozenset[str]] = {}
+
+
+def active_holidays() -> frozenset[str]:
+    """当前生效的休市日期集合；配置写坏时按「没有额外休市日」处理。
+
+    这里不抛异常：时钟查询被引擎每个 tick 调用，为了一个坏配置把整个行情
+    循环打断，比按周末规则正常跑更糟。坏数据在保存时就已被拒。
+    """
+    raw = str(getattr(settings, "holidays", "") or "")
+    hit = _HOLIDAY_CACHE.get(raw)
+    if hit is not None:
+        return hit
+    try:
+        parsed = frozenset(parse_holidays(raw))
+    except ValueError:
+        parsed = frozenset()
+    _HOLIDAY_CACHE.clear()
+    _HOLIDAY_CACHE[raw] = parsed
+    return parsed
+
+
+def is_holiday(day: date) -> bool:
+    """该自然日是否休市：周六周日一律休市，或登记在休市日历里。"""
+    return day.weekday() >= 5 or day.isoformat() in active_holidays()
+
+
+def next_trading_day(day: date) -> date:
+    """返回 day 之后（不含当天）的第一个交易日。"""
+    cursor = day + timedelta(days=1)
+    for _ in range(400):
+        if not is_holiday(cursor):
+            return cursor
+        cursor += timedelta(days=1)
+    return cursor
 
 
 def _parse_hm(text: str) -> dtime:
@@ -422,6 +521,12 @@ def _seconds_between(now: datetime, target: dtime) -> int:
     return max(0, int((dt - now).total_seconds()))
 
 
+def _seconds_until(day: date, now: datetime) -> int:
+    """距目标日 00:00 还有多少秒（休市日用来显示「何时恢复」）。"""
+    target = datetime.combine(day, dtime(0, 0), tzinfo=now.tzinfo)
+    return max(0, int((target - now).total_seconds()))
+
+
 def _closed_state(mode: str, preset: str, now: datetime, label: str, segment: str = "closed",
                   tz_label: str = "北京时间", phase: str = "closed", seconds_left: int = 0) -> SessionState:
     return SessionState(
@@ -457,9 +562,20 @@ def _slot_state(mode: str, preset: str, slot: Slot, now: datetime, tz_label: str
 
 
 def _plan_session(mode: str, preset: str, slots: list[Slot], tz, tz_label: str, now: datetime) -> SessionState:
-    """在时段表里定位当前时刻。表内无命中即为休市（盘前/盘后空窗、周末）。"""
+    """在时段表里定位当前时刻。表内无命中即为休市（盘前/盘后空窗、周末）。
+
+    休市日先于时段表判定：节假日/周末整天都不该被时段表命中，否则
+    国庆假期里配一段 09:30-11:30 就会把假期中的同一天也算成连续竞价，
+    价格照涨、委托照收。
+    """
     if now.weekday() >= 5:
         return _closed_state(mode, preset, now, "周末休市", tz_label=tz_label)
+    if now.date().isoformat() in active_holidays():
+        return _closed_state(
+            mode, preset, now, "节假日休市",
+            tz_label=tz_label, phase="holiday",
+            seconds_left=_seconds_until(next_trading_day(now.date()), now),
+        )
 
     t = now.time()
     for slot in slots:
@@ -550,12 +666,12 @@ def sessions_payload() -> dict:
 
 
 def trading_days(count: int, end: datetime | None = None) -> list[str]:
-    """回溯最近 count 个工作日（不含周末；节假日按工作日近似）。"""
+    """回溯最近 count 个交易日（跳过周末与休市日历里的节假日）。"""
     end = end or cn_now()
     days: list[str] = []
     cursor = end.date()
     while len(days) < count:
-        if cursor.weekday() < 5:
+        if not is_holiday(cursor):
             days.append(cursor.strftime("%Y-%m-%d"))
         cursor -= timedelta(days=1)
     return list(reversed(days))

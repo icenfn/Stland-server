@@ -20,6 +20,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from sqlalchemy import Index
 from sqlmodel import Field, SQLModel
 
 
@@ -238,7 +239,40 @@ class DailyBar(SQLModel, table=True):
     amount: float = 0.0
 
 
+class QuoteSnapshot(SQLModel, table=True):
+    """行情状态的落库快照（每个标的一行，随时覆盖）。
+
+    为什么必须有这张表：``SecurityState`` 全在内存里，进程一重启，昨收、
+    最新价、当日高低、累计成交量全部回到注册时的初值。真实交易下这等于
+    「重启一次，所有已发生的成交痕迹消失」——用户昨天在 10.50 成交的记录
+    还在，行情却显示 10.00，账实直接对不上。
+
+    每支标的只留最新一行（``code`` 作主键），写的是「当下这一天的状态」，
+    不是历史序列：历史由 ``DailyBar``（日）和 ``MinuteFrame``（分时）承载。
+    这样表行数恒等于标的数量，不会随时间膨胀。
+    """
+
+    code: str = Field(primary_key=True, max_length=12)
+    trade_date: str = Field(default="", index=True, max_length=10)
+    prev_close: float = 0.0
+    price: float = 0.0
+    open: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    volume: int = 0
+    amount: float = 0.0
+    updated_at: float = Field(default_factory=now_ts)
+
+
 class Order(SQLModel, table=True):
+    # 订单簿每次撮合都要按「标的 + 方向 + 状态」捞可成交挂单，rematch_pending
+    # 每轮还会全表扫一遍在途单。单列索引只能命中标的，剩下两个条件仍要逐行判；
+    # 复合索引让这条最热的查询直接走索引定位。
+    __table_args__ = (
+        Index("ix_order_book_lookup", "code", "side", "status", "order_type"),
+        Index("ix_order_open_scan", "status", "order_type"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
     order_no: str = Field(index=True, unique=True, max_length=32)
     user_id: int = Field(index=True)
@@ -259,6 +293,13 @@ class Order(SQLModel, table=True):
 
 
 class Trade(SQLModel, table=True):
+    # 对账按 order_id 分组求成交合计；风控按 user_id + 时间统计当日用量。
+    __table_args__ = (
+        Index("ix_trade_order", "order_id"),
+        Index("ix_trade_user_time", "user_id", "created_at"),
+        Index("ix_trade_user_code", "user_id", "code"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
     trade_no: str = Field(index=True, unique=True, max_length=32)
     order_id: int = Field(index=True)
