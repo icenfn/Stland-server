@@ -282,21 +282,36 @@ _stop = threading.Event()
 
 
 def _loop() -> None:
-    """后台行情推进线程：每 tick_seconds 推进一次，跨日自动结转。"""
+    """后台主循环：行情推进 + 挂单重撮 + 日终结算。
+
+    这三件事原先都写在 ``if settings.engine_enabled:`` 里面，等于「关掉
+    模拟引擎就关掉整个市场」：
+
+    * 不 ``rematch_pending`` → 限价单下单瞬间没成交就永远等不到；
+    * 不 ``settle_all`` → T+1 买入的股份永不解冻，次日开盘也卖不掉。
+
+    但「行情从哪来」和「交易怎么结算」本来是两件事。真实行情接入后
+    引擎不再 tick，结算却必须照常跑。所以这里按职责拆开：
+    只有 ``market_engine.tick()`` 受 ``engine_enabled`` 控制，
+    撮合与结算无条件执行。
+    """
     last_date = current_session().trade_date
     while not _stop.is_set():
         try:
+            # 1) 行情推进：只有模拟引擎需要，外部行情源由 feeder 写入
             if settings.engine_enabled:
                 market_engine.tick()
-                # 行情推进后再撮合一次挂单：限价单只有在价格走到委托价时才该成交，
-                # 下单瞬间撮合不到并不代表它永远不成交。
+
+            # 2) 挂单重撮：价格变化后，之前挂着的限价单可能已经够得着了
+            with session_scope() as session:
+                rematch_pending(session)
+
+            # 3) 日终结算：无论行情来自哪里，T+1 解冻与费用结算都必须发生
+            today = current_session().trade_date
+            if today != last_date:
+                last_date = today
                 with session_scope() as session:
-                    rematch_pending(session)
-                today = current_session().trade_date
-                if today != last_date:
-                    last_date = today
-                    with session_scope() as session:
-                        settle_all(session)
+                    settle_all(session)
         except Exception:  # 后台线程不可因单次异常退出
             logger.exception("行情循环异常")
         time.sleep(max(0.2, settings.tick_seconds))

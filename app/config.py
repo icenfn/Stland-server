@@ -74,6 +74,14 @@ class Settings:
         # 模拟引擎默认关闭：新部署启动后不自动推进行情，等管理员在
         # 「模拟配置」里确认参数再手动打开，避免上线瞬间价格就开始乱跳。
         self.engine_enabled: bool = _bool("STLAND_ENGINE_ENABLED", False)
+        # 行情源：simulated=内置模拟引擎 / external=外部真实行情。
+        # 与 engate_enabled 是两个独立开关 —— 「行情从哪来」和
+        # 「引擎跑不跑」不是一回事，原先焊死在一起才导致关引擎即关市场。
+        self.quote_source: str = os.getenv("STLAND_QUOTE_SOURCE", "simulated")
+        # 撮合模式：book=只撮合用户订单簿（真实市场，无人接单就挂着）
+        #           hybrid=先吃用户订单簿，剩余部分对做市商（原合成盘口）成交
+        # 默认 hybrid 是为了让模拟盘保持原有手感；要跑「纯真实交易」应切 book。
+        self.match_mode: str = os.getenv("STLAND_MATCH_MODE", "hybrid")
 
 
 @lru_cache(maxsize=1)

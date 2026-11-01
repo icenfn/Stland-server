@@ -273,6 +273,11 @@ class Trade(SQLModel, table=True):
     tax: float = 0.0
     transfer_fee: float = 0.0
     realized_pnl: float = 0.0
+    # 对手方信息：一笔成交两端都是真实账户时，双方都要能查到「我是跟谁成交的」。
+    # 对做市商成交（合成盘口）时为空 —— 没有真实对手方。
+    counterparty_user_id: Optional[int] = Field(default=None, index=True)
+    counterparty_order_id: Optional[int] = Field(default=None)
+    counterparty_order_no: str = Field(default="", max_length=32)
     created_at: float = Field(default_factory=now_ts, index=True)
 
 

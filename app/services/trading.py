@@ -18,6 +18,7 @@ from datetime import datetime
 from sqlmodel import Session, select
 
 from ..engine.book import Level, walk_book, vwap
+from ..engine import orderbook, quote_source
 from ..engine.market import market_engine
 from ..engine.session import current_session
 from ..models import (
@@ -71,9 +72,16 @@ def _add_flow(
 
 
 def _book_levels(code: str, side: str) -> list[Level]:
+    """合成盘口（来自行情引擎）。hybrid 模式下用作「做市商」那一侧的兜底。"""
     depth = market_engine.depth(code) or {"bids": [], "asks": []}
     raw = depth["asks"] if side == "buy" else depth["bids"]
     return [Level(price=float(x["price"]), volume=int(x["volume"])) for x in raw]
+
+
+def _book_levels_from_users(session: Session, code: str, side: str) -> list[Level]:
+    """真实对手盘：其他用户挂在盘上的限价委托。"""
+    rows = orderbook.quote_levels(session, code, side)
+    return [Level(price=float(x["price"]), volume=int(x["volume"])) for x in rows]
 
 
 def place_order(
@@ -194,25 +202,166 @@ def place_order(
     return order
 
 
-def _match_order(session: Session, user: User, order: Order, stock: Stock, quote: dict) -> None:
-    """按盘口逐档撮合。limit_price 为 None 表示市价单（五档保护）。"""
-    # 结算规则从当前时钟取，而不是写死 T+1：同一份撮合代码要服务
-    # T+1、T+0 与调试三种模式，只有在成交入账时才分叉。
-    settle_mode = current_session().settle
-    levels = _book_levels(stock.code, "buy" if order.side == OrderSide.BUY else "sell")
-    if order.order_type == OrderType.LIMIT:
-        limit_price = order.price
-        fills = walk_book(levels, order.quantity, limit_price, order.side.value)
-    else:
-        # 市价单：以五档最深价为保护价，逐档吃单
-        if not levels:
-            fills = []
-        else:
-            protect = levels[min(4, len(levels) - 1)].price
-            fills = walk_book(levels, order.quantity, protect, order.side.value)
+def match_mode() -> str:
+    """当前撮合模式。每次现读配置，改完配置不必重启服务。"""
+    from ..config import settings
 
-    filled_qty = sum(f.quantity for f in fills)
+    mode = str(getattr(settings, "match_mode", "hybrid") or "hybrid").lower()
+    return mode if mode in ("book", "hybrid") else "hybrid"
+
+
+def _settle_resting(
+    session: Session,
+    stock: Stock,
+    resting: Order,
+    price: float,
+    quantity: int,
+    settle_mode: str,
+) -> None:
+    """结算被吃掉的真实挂单（对手方）。
+
+    这一步是「真实交易」和「跟随机数对赌」的分水岭：成交不再凭空生成
+    一份持仓，而是把股票从卖方账户划到买方账户，资金反向划过去，
+    双方成交价一致、手续费各收各的。
+    """
+    other = session.get(User, resting.user_id)
+    if other is None:
+        return
+
+    amount = price * quantity
+    pos = _get_position(session, other.id or 0, stock.code)
+
+    if resting.side == OrderSide.SELL:
+        if pos is None or pos.quantity < quantity:
+            # 挂单时已冻结持仓，理论上不会走到这里；真发生说明数据不一致，
+            # 宁可跳过这笔划转，也不能把持仓算成负数。
+            return
+        fee = calc_fee(amount, "sell", *resolve_commission(other))
+        prev_cost = pos.avg_cost
+        pos.quantity -= quantity
+        pos.frozen = max(0, pos.frozen - quantity)
+        pos.last_price = price
+        if pos.quantity == 0:
+            pos.avg_cost = 0.0
+        pos.updated_at = time.time()
+        session.add(pos)
+        credit = amount - fee.total
+        before = other.cash
+        other.cash = round_money(other.cash + credit)
+        _add_flow(
+            session, other, "trade", credit, before, resting.order_no,
+            f"{stock.code} 卖出成交",
+        )
+        pnl = (price - prev_cost) * quantity - fee.total
+    else:
+        if pos is None:
+            pos = Position(
+                user_id=other.id or 0, code=stock.code, quantity=0, available=0, frozen=0
+            )
+        fee = calc_fee(amount, "buy", *resolve_commission(other))
+        new_qty = pos.quantity + quantity
+        cost_new = pos.avg_cost * pos.quantity + amount + fee.total
+        pos.avg_cost = round(cost_new / new_qty, 4) if new_qty else 0.0
+        pos.quantity = new_qty
+        # 与主动方同一套结算规则：T+0 买入即可卖，T+1 等日切解冻
+        if settle_mode == "t0":
+            pos.available += quantity
+        pos.last_price = price
+        pos.updated_at = time.time()
+        session.add(pos)
+        # 挂单时已冻结资金，这里把实际花费从冻结池核销（现金早已扣除）
+        other.frozen_cash = round_money(
+            max(0.0, other.frozen_cash - (amount + fee.total))
+        )
+        other.updated_at = time.time()
+        session.add(other)
+        pnl = 0.0
+
+    session.add(
+        Trade(
+            trade_no=gen_no("T"),
+            order_id=resting.id or 0,
+            order_no=resting.order_no,
+            user_id=other.id or 0,
+            code=stock.code,
+            side=resting.side,
+            price=price,
+            quantity=quantity,
+            amount=round_money(amount),
+            fee=fee.commission,
+            tax=fee.stamp_tax,
+            transfer_fee=fee.transfer_fee,
+            realized_pnl=round_money(pnl),
+            created_at=time.time(),
+        )
+    )
+
+    filled = int(resting.filled_quantity or 0) + quantity
+    prev_avg = resting.avg_fill_price or 0.0
+    resting.avg_fill_price = (
+        round((prev_avg * (filled - quantity) + price * quantity) / filled, 4)
+        if filled
+        else price
+    )
+    resting.filled_quantity = filled
+    resting.fee = round_money((resting.fee or 0.0) + fee.total)
+    resting.status = OrderStatus.FILLED if filled >= resting.quantity else OrderStatus.PARTIAL
+    resting.updated_at = time.time()
+    session.add(resting)
+
+
+def _match_order(session: Session, user: User, order: Order, stock: Stock, quote: dict) -> None:
+    """撮合：先吃用户订单簿，剩余量再按撮合模式处理。
+
+    原实现只吃 ``market_engine.depth()`` 的合成盘口 —— 对手盘是
+    ``register()`` 时生成的随机五档，``walk_book()`` 又只读不扣减，
+    等于无限流动性。也就是说用户是在和一段随机数对赌：机构卖出的股票
+    凭空生成，零售买入的凭空消失，双方永远不可能真正成交。
+
+    现在先撮真实挂单，一笔成交两端都是真实账户。剩余量由
+    ``settings.match_mode`` 决定：
+
+    * ``book``   —— 留在盘上等对手方，没人接就挂着（真实市场行为）；
+    * ``hybrid`` —— 交给做市商（原合成盘口）成交，保持模拟盘原有手感。
+    """
+    settle_mode = current_session().settle
+    taker_side = order.side
+    limit_price = float(order.price) if order.order_type == OrderType.LIMIT else None
+
+    # ---- 1) 真实对手盘：用户订单簿 ----
+    plan = orderbook.match_against_book(
+        session,
+        stock.code,
+        taker_side,
+        order.quantity,
+        limit_price,
+        exclude_user_id=user.id,
+        exclude_order_id=order.id,
+    )
+    fills: list[dict] = [
+        {"price": m.price, "quantity": m.quantity, "resting": m.order} for m in plan
+    ]
+    got = sum(f["quantity"] for f in fills)
+
+    # ---- 2) 剩余量：只有 hybrid 才找做市商 ----
+    left = int(order.quantity) - got
+    if left > 0 and match_mode() == "hybrid":
+        levels = _book_levels(stock.code, "buy" if taker_side == OrderSide.BUY else "sell")
+        if order.order_type == OrderType.LIMIT:
+            took = walk_book(levels, left, float(order.price), taker_side.value)
+        elif levels:
+            # 市价单：以五档最深价为保护价，避免无限滑点
+            protect = levels[min(4, len(levels) - 1)].price
+            took = walk_book(levels, left, protect, taker_side.value)
+        else:
+            took = []
+        for f in took:
+            fills.append({"price": f.price, "quantity": f.quantity, "resting": None})
+
+    filled_qty = sum(f["quantity"] for f in fills)
     if filled_qty <= 0:
+        # 市价单在盘上没有对手就是废单，撤销并释放冻结；
+        # 限价单则留在盘上等对手方（book 模式下这是常态）。
         if order.order_type == OrderType.MARKET:
             order.status = OrderStatus.CANCELLED
             order.reject_reason = "市价委托无对手盘，已撤销"
@@ -231,18 +380,22 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
     prev_avg = order.avg_fill_price or 0.0
     pos = _get_position(session, user.id or 0, stock.code)
 
-    for fill in fills:
-        amount = fill.price * fill.quantity
-        fee = calc_fee(amount, order.side.value, *resolve_commission(user))
+    for f in fills:
+        price = float(f["price"])
+        quantity = int(f["quantity"])
+        amount = price * quantity
+        fee = calc_fee(amount, taker_side.value, *resolve_commission(user))
         total_amount += amount
         total_fee += fee.commission
         total_tax += fee.stamp_tax
         total_transfer += fee.transfer_fee
 
-        if order.side == OrderSide.BUY:
+        if taker_side == OrderSide.BUY:
             if pos is None:
-                pos = Position(user_id=user.id or 0, code=stock.code, quantity=0, available=0, frozen=0)
-            new_qty = pos.quantity + fill.quantity
+                pos = Position(
+                    user_id=user.id or 0, code=stock.code, quantity=0, available=0, frozen=0
+                )
+            new_qty = pos.quantity + quantity
             cost_prev = pos.avg_cost * pos.quantity
             cost_new = cost_prev + amount + fee.total
             pos.avg_cost = round(cost_new / new_qty, 4) if new_qty else 0.0
@@ -251,19 +404,19 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             # · T+1 → 不计入可卖，次日日切时由 settle_all 解冻；
             # · T+0 / 调试 → 直接计入可卖，买入后立刻能挂卖单。
             if settle_mode == "t0":
-                pos.available += fill.quantity
-            pos.last_price = fill.price
+                pos.available += quantity
+            pos.last_price = price
             pos.updated_at = time.time()
             session.add(pos)
             user.cash = round_money(user.cash)  # 资金已在冻结时扣除
         else:
             if pos is None:
                 continue
-            pnl = (fill.price - pos.avg_cost) * fill.quantity - fee.total
+            pnl = (price - pos.avg_cost) * quantity - fee.total
             realized += pnl
-            pos.quantity -= fill.quantity
-            pos.frozen = max(0, pos.frozen - fill.quantity)
-            pos.last_price = fill.price
+            pos.quantity -= quantity
+            pos.frozen = max(0, pos.frozen - quantity)
+            pos.last_price = price
             if pos.quantity == 0:
                 pos.avg_cost = 0.0
             pos.updated_at = time.time()
@@ -271,8 +424,12 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             credit = amount - fee.total
             before = user.cash
             user.cash = round_money(user.cash + credit)
-            _add_flow(session, user, "trade", credit, before, order.order_no, f"{stock.code} 卖出成交")
+            _add_flow(
+                session, user, "trade", credit, before, order.order_no,
+                f"{stock.code} 卖出成交",
+            )
 
+        resting = f["resting"]
         session.add(
             Trade(
                 trade_no=gen_no("T"),
@@ -280,19 +437,30 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
                 order_no=order.order_no,
                 user_id=user.id or 0,
                 code=stock.code,
-                side=order.side,
-                price=fill.price,
-                quantity=fill.quantity,
+                side=taker_side,
+                price=price,
+                quantity=quantity,
                 amount=round_money(amount),
                 fee=fee.commission,
                 tax=fee.stamp_tax,
                 transfer_fee=fee.transfer_fee,
                 realized_pnl=round_money(realized),
+                # 成交对手方：对做市商成交时为空，对真人挂单时记录对方
+                counterparty_user_id=(resting.user_id if resting is not None else None),
+                counterparty_order_id=(resting.id if resting is not None else None),
+                counterparty_order_no=(resting.order_no if resting is not None else ""),
                 created_at=time.time(),
             )
         )
 
-    batch_avg = vwap([f for f in fills])
+        # 成交回写行情：让价格由真实成交推动，而不是只等引擎 tick
+        market_engine.apply_trade(stock.code, price, quantity)
+
+        # 对手方是真实挂单时，同步完成它的入账与成交进度
+        if resting is not None:
+            _settle_resting(session, stock, resting, price, quantity, settle_mode)
+
+    batch_avg = vwap([Level(price=f["price"], volume=f["quantity"]) for f in fills])
     total_filled = prev_filled + filled_qty
     order.avg_fill_price = (
         round((prev_avg * prev_filled + batch_avg * filled_qty) / total_filled, 4)
@@ -316,15 +484,15 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             # 限价单还有剩余：这部分继续挂着，冻结资金必须留在冻结池里
             remain_qty = order.quantity - order.filled_quantity
             remain_amt = order.price * remain_qty
-            keep_frozen = round_money(remain_amt + calc_fee(remain_amt, "buy", *resolve_commission(user)).total)
+            keep_frozen = round_money(
+                remain_amt + calc_fee(remain_amt, "buy", *resolve_commission(user)).total
+            )
 
     session.add(order)
-    _release_freeze(session, user, order, stock, total_amount + total_fee + total_tax + total_transfer, keep_frozen)
-
-    user.realized_pnl = round_money(user.realized_pnl + realized)
-    user.fee_paid = round_money(user.fee_paid + order.fee)
-    user.updated_at = time.time()
-    session.add(user)
+    _release_freeze(
+        session, user, order, stock,
+        total_amount + total_fee + total_tax + total_transfer, keep_frozen,
+    )
 
 
 def _release_freeze(
@@ -390,20 +558,27 @@ def rematch_pending(session: Session) -> int:
         return 0
 
     filled_orders = 0
+    mode = match_mode()
     for order in orders:
         try:
-            quote = market_engine.quote(order.code)
+            quote = quote_source.get_source().quote_any(order.code)
             stock = session.get(Stock, order.code)
             user = session.get(User, order.user_id)
-            if quote is None or stock is None or user is None:
+            if stock is None or user is None:
                 continue
 
-            last_price = float(quote["price"])
-            # 涨跌停时无法成交，跳过即可（不要动冻结，避免资金来回搬）
-            if order.side == OrderSide.BUY and last_price >= stock.limit_up - 1e-9:
+            # 涨跌停时不撮合，跳过即可（不要动冻结，避免资金来回搬）
+            if quote is not None:
+                last_price = float(quote["price"])
+                if order.side == OrderSide.BUY and last_price >= stock.limit_up - 1e-9:
+                    continue
+                if order.side == OrderSide.SELL and last_price <= stock.limit_down + 1e-9:
+                    continue
+            elif mode == "hybrid":
+                # hybrid 需要合成盘口，没有报价就撮不了
                 continue
-            if order.side == OrderSide.SELL and last_price <= stock.limit_down + 1e-9:
-                continue
+            # book 模式没有最新价也能撮：限价单之间只要价格交叉就该成交，
+            # 这也是真实市场里价格发现的过程 —— 不需要外部行情先动。
 
             before = order.filled_quantity
             _match_order(session, user, order, stock, quote)

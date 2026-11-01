@@ -192,6 +192,23 @@ class SecurityState:
             "asks": [{"price": l.price, "volume": l.volume} for l in self.asks],
         }
 
+    def apply_trade(self, price: float, quantity: int) -> None:
+        """把一笔真实成交写回行情。
+
+        原先 ``walk_book`` 只读盘口、不扣量，成交对行情没有任何影响 ——
+        用户成交了，K 线却像什么都没发生。真实市场里成交本身就是价格来源，
+        这里让成交推动 last / high / low / volume / amount，并据此重算涨跌停，
+        使「用户之间的成交」能够自己走出趋势，而不必等引擎 tick。
+        """
+        qty = max(0, int(quantity))
+        if qty <= 0 or price <= 0:
+            return
+        self.price = float(price)
+        self.high = max(self.high, price)
+        self.low = min(self.low, price) if self.low > 0 else price
+        self.volume += qty
+        self.amount = round(self.amount + price * qty, 2)
+
 
 class MarketEngine:
     """线程安全的模拟行情引擎。"""
@@ -526,6 +543,13 @@ class MarketEngine:
         with self._lock:
             st = self._states.get(code)
             return st.price if st else 0.0
+
+    def apply_trade(self, code: str, price: float, quantity: int) -> None:
+        """成交回写行情。无该标的报价时静默忽略（外部行情源下没有合成状态）。"""
+        with self._lock:
+            st = self._states.get(code)
+            if st is not None:
+                st.apply_trade(price, quantity)
 
     def minute_series(self, code: str, limit: int = 240, days: int = 1) -> list[dict]:
         """分时序列。days=1 取当日；days>1 取最近 N 个自然日首尾相接的连续轴。
