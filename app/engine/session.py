@@ -16,8 +16,9 @@
 
 * **结算模式** ``trade_mode``：``t1`` / ``t0`` / ``debug``。只决定「当日买入的
   持仓何时变成可卖」，与时段无关；
-* **交易时段** ``session_preset``（``a_share`` / ``us`` / ``custom``）+
-  ``session_plan``（自定义时段表的 JSON）。每段显式声明两个能力：
+* **交易时段** ``session_slots``（一张 JSON 时段表，唯一事实来源）。
+  后台的上方按钮「A股」「美股」只是把内置模板填进这张表，保存的仍是 JSON。
+  每段显式声明两个能力：
 
   * ``match`` —— 是否允许连续撮合（价格会不会推进）；
   * ``trade`` —— 是否接受委托申报。
@@ -125,7 +126,7 @@ SEGMENT_LABELS: dict[str, str] = {
     "closed": "休市",
 }
 
-#: 自定义时段表允许出现的 segment（写错时直接拒绝，避免写进 K 线标签里）
+#: 时段表允许出现的 segment（写错时直接拒绝，避免写进 K 线标签里）
 ALLOWED_SEGMENTS = tuple(SEGMENT_LABELS.keys())
 
 #: 没写 phase 时按 segment 兜底，保证状态栏永远有值
@@ -200,15 +201,11 @@ PRESETS: dict[str, dict] = {
             Slot("16:00", "20:00", "盘后交易", "post", True, True, "post_market"),
         ],
     },
-    "custom": {
-        "label": "自定义",
-        "timezone": "Asia/Shanghai",
-        "tz_label": "北京时间",
-        "slots": [],
-    },
 }
 
-PRESET_KEYS: tuple[str, ...] = ("a_share", "us", "custom")
+#: 可一键填入的预设（后台「交易时段」上方的按钮就按这个顺序渲染）。
+#: 注意：预设不再是「运行模式」，只是给运营省去手写 JSON 的模板。
+FILLABLE_PRESETS: tuple[str, ...] = ("a_share", "us")
 
 
 def _parse_hm(text: str) -> dtime:
@@ -224,7 +221,7 @@ def _parse_hm(text: str) -> dtime:
 
 
 def parse_slots(raw: str | None) -> list[Slot]:
-    """把 ``session_plan`` 的 JSON 文本解析成时段表。
+    """把 ``session_slots`` 的 JSON 文本解析成时段表。
 
     格式（数组，按时间升序）：
 
@@ -281,42 +278,62 @@ def parse_slots(raw: str | None) -> list[Slot]:
     return slots
 
 
-def normalize_preset(raw: str | None) -> str:
-    text = str(raw or "").strip()
-    if text in PRESETS:
-        return text
-    alias = {
-        "a股": "a_share",
-        "ashare": "a_share",
-        "a-share": "a_share",
-        "cn": "a_share",
-        "us_stock": "us",
-        "美股": "us",
-        "自选": "custom",
-    }
-    return alias.get(text.lower(), "a_share")
+def preset_slots_json(key: str) -> str:
+    """把内置预设导出成规整的 JSON 文本，供后台按钮一键填入。"""
+    conf = PRESETS.get(key) or PRESETS["a_share"]
+    rows = [
+        {
+            "start": s.start,
+            "end": s.end,
+            "label": s.label,
+            "segment": s.segment,
+            "match": s.match,
+            "trade": s.trade,
+        }
+        for s in conf["slots"]
+    ]
+    return json.dumps(rows, ensure_ascii=False, indent=2)
 
 
-def resolve_plan(preset: str | None = None) -> tuple[str, object, list[Slot], str]:
+def match_preset(slots: list[Slot]) -> str:
+    """判断一份时段表是否与某个内置预设完全一致，一致就返回该预设 key。
+
+    只用于展示（「当前时段」标签）与保存校验，不参与择时计算 ——
+    交易时段只有「保存下来的那张表」这一个事实来源。
+    """
+    if not slots:
+        return ""
+    signature = [(s.start, s.end, s.segment, s.match, s.trade) for s in slots]
+    for key in FILLABLE_PRESETS:
+        conf = PRESETS[key]
+        if signature == [(s.start, s.end, s.segment, s.match, s.trade) for s in conf["slots"]]:
+            return key
+    return "custom"
+
+
+def resolve_plan() -> tuple[str, object, list[Slot], str]:
     """返回 ``(preset_key, tzinfo, slots, tz_label)``。
 
-    自定义预设但没填时段表时，回落 A 股预设 —— 否则一整天都是「休市」，
+    时段表的唯一来源是 ``settings.session_slots`` 的 JSON。preset_key 只是
+    这份表「刚好等于哪个内置预设」的判断结果，供状态栏显示。
+
+    JSON 为空或解析失败时回落 A 股内置时段 —— 否则一整天都是「休市」，
     运营会以为服务挂了。
     """
-    key = normalize_preset(preset if preset is not None else getattr(settings, "session_preset", None))
-    conf = PRESETS.get(key, PRESETS["a_share"])
-    if key == "custom":
-        # 自定义预设：时段表来自 `session_slots`。表为空时回落 A 股预设 ——
-        # 否则一整天都判定为「休市」，运营会以为服务挂了。
+    try:
         slots = parse_slots(getattr(settings, "session_slots", ""))
-        if not slots:
-            conf = PRESETS["a_share"]
-            key = "a_share"
-            slots = list(conf["slots"])
-        return key, CN_ZONE, slots, "北京时间"
+    except ValueError:
+        slots = []
+    if not slots:
+        conf = PRESETS["a_share"]
+        return "a_share", CN_ZONE, list(conf["slots"]), "北京时间"
 
-    tz, tz_label = _resolve_tz(conf["timezone"])
-    return key, tz, list(conf["slots"]), tz_label
+    key = match_preset(slots)
+    if key in PRESETS:
+        tz, tz_label = _resolve_tz(PRESETS[key]["timezone"])
+        return key, tz, slots, tz_label
+    # 自定义表没有时区信息，按 A 股/北京时间处理
+    return "custom", CN_ZONE, slots, "北京时间"
 
 
 def _resolve_tz(name: str) -> tuple[object, str]:

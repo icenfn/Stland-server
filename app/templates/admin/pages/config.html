@@ -4,8 +4,7 @@
     <div class="app-page-desc">
       服务自身的安全开关，以及整个模拟盘的市场规则：交易时段、结算方式、交易费用和新账户默认值。
       保存后立即生效。
-    </div>
-    <div class="app-toolbar">
+    </div>    <div class="app-toolbar">
       <button class="mdui-btn mdui-ripple" id="refreshCfg">刷新</button>
       <button class="mdui-btn mdui-ripple" id="resetCfg">恢复本页默认</button>
       <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="saveCfg">保存修改</button>
@@ -24,7 +23,7 @@
       <ul class="mdui-typo">
         <li>关闭「请求签名校验」后服务端不再核对 HMAC 签名，仅建议联调期临时关闭，正式环境保持开启。</li>
         <li>「登录失败锁定阈值」按账号统计连续失败次数，触发后锁定 5 分钟。</li>
-        <li>「交易时段预设」选择「自定义时段表」后，下方时段表才会展开并生效。</li>
+        <li>「交易时段」是一张 JSON 时段表：可点上方「A股」「美股」按钮一键填入内置模板，再按需修改；保存后立即生效。</li>
         <li>行情引擎的推进速度与波动强度在「模拟行情 › 模拟配置」中调整。</li>
       </ul>
     </div>

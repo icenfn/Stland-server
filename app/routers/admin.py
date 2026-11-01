@@ -23,7 +23,12 @@ from ..config import settings
 from ..db import get_session
 from ..engine import index as index_engine
 from ..engine.market import market_engine
-from ..engine.session import current_session
+from ..engine.session import (
+    FILLABLE_PRESETS,
+    PRESETS,
+    current_session,
+    preset_slots_json,
+)
 from ..models import (
     AccountStatus,
     Admin,
@@ -238,6 +243,12 @@ def get_settings(
         "groups": [
             {"key": key, "label": label}
             for key, label in runtime_config.GROUP_LABELS.items()
+        ],
+        # 「交易时段」上方的填充按钮：后端出模板，前端不另抄一份时间表，
+        # 以后调整内置时段只改 session.py 的 PRESETS。
+        "slot_presets": [
+            {"key": key, "label": PRESETS[key]["label"], "json": preset_slots_json(key)}
+            for key in FILLABLE_PRESETS
         ],
     }
 

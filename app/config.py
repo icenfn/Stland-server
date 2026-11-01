@@ -10,8 +10,8 @@ def _bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
 
-#: 自定义时段表的默认值：与 A 股内置时段表保持一致，运营切到「自定义」
-#: 后开箱即可用，不必对着空文本框自己拼 JSON。
+#: 交易时段的默认值：与 A 股内置时段表保持一致。这样即使库里没有存过
+#: 时段表，服务也按 A 股时段跑，运营不必对着空文本框自己拼 JSON。
 DEFAULT_SESSION_SLOTS = (
     '[{"start":"09:15","end":"09:25","label":"开盘集合竞价","segment":"auction","match":false,"trade":true},'
     '{"start":"09:25","end":"09:30","label":"待开盘","segment":"auction","match":false,"trade":true},'
@@ -63,8 +63,7 @@ class Settings:
         self.trade_mode: str = os.getenv(
             "STLAND_TRADE_MODE", os.getenv("STLAND_SESSION_MODE", "t1")
         )
-        # 交易时段预设：a_share / us / custom（custom 时读 session_slots）
-        self.session_preset: str = os.getenv("STLAND_SESSION_PRESET", "a_share")
+        # 交易时段：只存一份 JSON 时段表，默认值即 A 股内置时段
         self.session_slots: str = os.getenv("STLAND_SESSION_SLOTS", DEFAULT_SESSION_SLOTS)
         # 模拟引擎强度系数（运行期可调）
         self.market_volatility: float = float(os.getenv("STLAND_MARKET_VOLATILITY", "1.0"))

@@ -26,6 +26,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from .config import settings
+from .engine.session import parse_slots
 from .models import Setting
 
 logger = logging.getLogger("stland.runtime_config")
@@ -90,7 +91,7 @@ class Spec:
     def coerce(self, raw: Any) -> Any:
         """把前端传来的字符串/数字规范成目标类型，越界抛 ValueError。"""
         if self.kind == "text":
-            # 自由文本（如自定义时段表 JSON）。这里只做长度与基本格式校验，
+            # 自由文本（如交易时段 JSON）。这里只做长度与基本格式校验，
             # 业务层的语义校验交给上层，因为运行期配置层不该知道
             # 「哪些 segment 合法」这种领域规则。
             text = str(raw if raw is not None else "").strip()
@@ -167,23 +168,14 @@ RUNTIME_SPECS: dict[str, Spec] = {
     ),
 
     # ======================= 系统设置 · 交易时段 =======================
-    "session_preset": Spec(
-        "session_preset", "交易时段预设", "choice", 
-        choices=("a_share", "us", "custom"),
-        choice_labels=(
-            ("a_share", "A股"),
-            ("us", "美股"),
-            ("custom", "自定义时段表"),
-        ),
-        note="选 A股/美股 用内置时段表；选「自定义」后以下方时段表为准。调试模式下本项失效",
-        group=GROUP_SYSTEM, section="session",
-    ),
     "session_slots": Spec(
-        "session_slots", "自定义时段表", "text", 
-        maximum=4000,
-        note='仅在预设为「自定义时段表」时生效；A股/美股 走代码内置时段表，本项被忽略。'
-             'JSON 数组，按时间升序。每段：{"start":"09:30","end":"11:30","label":"上午连续竞价","segment":"continuous","match":true,"trade":true}。'
-             'segment 取 pre/auction/continuous/lunch/post/fixed/closed；match=是否连续撮合，trade=是否受理申报',
+        "session_slots", "交易时段", "text", 
+        maximum=8000,
+        note='可点上方「A股」「美股」按钮快速填入内置时段，也可自行编辑 JSON。'
+             'JSON 数组按时间升序，每段：{"start":"09:30","end":"11:30","label":"上午连续竞价",'
+             '"segment":"continuous","match":true,"trade":true}。'
+             'segment 取 pre/auction/continuous/lunch/post/fixed/closed；'
+             'match=是否连续撮合，trade=是否受理申报。调试模式下本项失效',
         group=GROUP_SYSTEM, section="session",
     ),
 
@@ -375,6 +367,14 @@ def update(
         except (ValueError, TypeError) as exc:
             rejected.append({"key": key, "reason": str(exc)})
             continue
+        if key == "session_slots":
+            # 时段表要能真的解析出时段才允许落库：否则存进去也只会走
+            # 「解析失败回落 A 股」，运营以为改生效了实际没变。
+            try:
+                parse_slots(str(value or ""))
+            except ValueError as exc:
+                rejected.append({"key": key, "reason": str(exc)})
+                continue
         apply_value(key, value)
         row = session.get(Setting, key)
         if row is None:

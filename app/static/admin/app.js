@@ -1023,9 +1023,20 @@
       }).join('') + '</select>';
     }
     if (c.kind === 'text') {
-      // 自由文本（自定义时段表 JSON）：用 textarea 而不是单行 input，
-      // 一段 A 股时段表有七八条，单行框里改 JSON 基本没法编辑。
-      return '<textarea class="app-select app-textarea" rows="6" ' + key + '>' +
+      // 自由文本（交易时段 JSON）：用 textarea 而不是单行 input，
+      // 一张时段表有七八段，单行框里改 JSON 基本没法编辑。
+      // 上方给几个内置模板按钮，点一下就把模板填进框里再由运营自己改；
+      // 保存的始终是这张表本身，不存在「预设」这个独立状态。
+      var fills = '';
+      if (c.key === 'session_slots') {
+        fills = '<div class="app-cfg-fill">' +
+          (state.slotPresets || []).map(function (p) {
+            return '<button type="button" class="mdui-btn mdui-ripple app-fill-btn" ' +
+              'data-fill-preset="' + esc(p.key) + '">' + esc(p.label) + '</button>';
+          }).join('') +
+          '<span class="app-fill-hint">点击填入内置时段模板</span></div>';
+      }
+      return fills + '<textarea class="app-select app-textarea" rows="10" ' + key + '>' +
         esc(String(c.value == null ? '' : c.value)) + '</textarea>';
     }
     return '<input class="app-select" ' + key + ' type="number" step="' +
@@ -1035,29 +1046,39 @@
   function cfgFieldHtml(c) {
     var range = (c.kind === 'float' || c.kind === 'int')
       ? (c.min + ' ~ ' + c.max + (c.unit ? ' ' + c.unit : '')) : '';
+    // 多行文本（交易时段 JSON）的默认值就是整张表，铺在说明里会淹没其它信息
+    var showDefault = !(c.kind === 'text' && String(c.default || '').length > 60);
     return '<div class="app-cfg" data-cfgbox="' + esc(c.key) + '">' +
       '<div class="app-cfg-label">' + esc(c.label) + '</div>' +
       '<div class="app-cfg-key">' + esc(c.key) + '</div>' +
       cfgControl(c) +
       '<div class="app-cfg-note">' + esc(c.note || '') +
       (range ? ' · 范围 ' + esc(range) : '') +
-      ' · 默认 ' + esc(c.default) + '</div>' +
+      (showDefault ? ' · 默认 ' + esc(c.default) : '') +
+      '</div>' +
       '</div>';
   }
 
   function bindCfgInputs(host, group) {
-    // 交易时段预设与自定义时段表联动：只有选中「custom」时才展开时段表，
-    // 否则把整块隐藏 —— 选 A股/美股 时它不生效，留着只会让人误以为改了有用。
-    var slotsBox = host.querySelector('[data-cfgbox="session_slots"]');
-    var presetEl = host.querySelector('[data-cfg="session_preset"]');
-    var syncSlots = function () {
-      if (!slotsBox || !presetEl) return;
-      slotsBox.style.display = String(presetEl.value) === 'custom' ? '' : 'none';
-    };
-    if (presetEl) {
-      presetEl.addEventListener('change', syncSlots);
-      syncSlots();
-    }
+    // 内置时段模板按钮：把对应预设的 JSON 填进 textarea，并标记为已修改，
+    // 让运营能直接保存，也还能在填入后继续手改。
+    var slotsEl = host.querySelector('[data-cfg="session_slots"]');
+    host.querySelectorAll('[data-fill-preset]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (!slotsEl) return;
+        var key = btn.dataset.fillPreset;
+        var hit = (state.slotPresets || []).filter(function (p) { return p.key === key; })[0];
+        if (!hit) return;
+        slotsEl.value = hit.json;
+        slotsEl.dispatchEvent(new Event('input', { bubbles: true }));
+        var box = slotsEl.closest('.app-cfg');
+        if (box) {
+          box.classList.remove('app-cfg-dirty');
+          // 触发一次 input 会打上 dirty 标记，这里保持标记以便保存
+          box.classList.add('app-cfg-dirty');
+        }
+      });
+    });
     host.querySelectorAll('[data-cfg]').forEach(function (el) {
       var mark = function () {
         if (!state.cfgDirty[group]) state.cfgDirty[group] = {};
@@ -1078,6 +1099,8 @@
       var items = d.items || [];
       state.cfgByGroup[group] = items;
       state.cfgDirty[group] = {};
+      // 时段模板由后端下发（session.py 的 PRESETS），前端不硬编码时间表
+      state.slotPresets = d.slot_presets || [];
       if (!items.length) {
         host.innerHTML = '<div class="app-loading">暂无可配置项</div>';
         return;
