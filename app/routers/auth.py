@@ -13,18 +13,18 @@ from sqlmodel import Session, select
 
 from ..config import settings
 from ..db import get_session
-from ..models import AccountStatus, RevokedToken, Role, User
+from ..models import AccountStatus, Role, User
 from ..security import (
     TokenError,
     create_token,
     decode_token,
     hash_password,
-    random_secret,
     verify_password,
 )
+from ..services import accounts
 from ..services.deps import current_user, issue_access_token
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 class RegisterIn(BaseModel):
@@ -59,19 +59,21 @@ class RefreshIn(BaseModel):
     refresh_token: str
 
 
-def public_user(user: User) -> dict:
+def public_user(user: User, acct=None) -> dict:
+    """交易账户的对外视图。资金部分来自 account 表（见 services.accounts）。"""
+    money = accounts.snapshot(acct)
     return {
         "id": user.id,
         "username": user.username,
         "display_name": user.display_name or user.username,
         "role": user.role.value,
         "status": user.status.value,
-        "cash": round(user.cash, 2),
-        "frozen_cash": round(user.frozen_cash, 2),
-        "market_value": round(user.market_value, 2),
-        "total_asset": round(user.total_asset, 2),
-        "realized_pnl": round(user.realized_pnl, 2),
-        "credit_limit": round(user.credit_limit, 2),
+        "cash": money["cash"],
+        "frozen_cash": money["frozen_cash"],
+        "market_value": money["market_value"],
+        "total_asset": money["total_asset"],
+        "realized_pnl": money["realized_pnl"],
+        "credit_limit": money["credit_limit"],
         "risk_level": user.risk_level,
         "risk_assessed": user.risk_assessed_at > 0,
         "risk_assessed_at": user.risk_assessed_at,
@@ -90,14 +92,19 @@ def register(payload: RegisterIn, session: Session = Depends(get_session)) -> di
         display_name=payload.display_name or payload.username,
         password_hash=hash_password(payload.password),
         role=payload.role,
-        cash=float(settings.seed_cash),
-        total_asset=float(settings.seed_cash),
-        credit_limit=0.0 if payload.role == Role.RETAIL else 5_000_000.0,
     )
     session.add(user)
     session.commit()
     session.refresh(user)
-    return {"user": public_user(user), "token": issue_access_token(user)}
+    # 资金落在独立的 account 行：初始资金在这里一次写清，之后只由交易/调账改动。
+    acct = accounts.of(session, user)
+    acct.cash = float(settings.seed_cash)
+    acct.credit_limit = 0.0 if payload.role == Role.RETAIL else 5_000_000.0
+    accounts.recompute(acct)
+    session.add(acct)
+    session.commit()
+    session.refresh(acct)
+    return {"user": public_user(user, acct), "token": issue_access_token(user)}
 
 
 @router.post("/login")
@@ -135,7 +142,11 @@ def login(payload: LoginIn, session: Session = Depends(get_session)) -> dict:
     session.refresh(user)
 
     refresh = create_token({"sub": str(user.id), "scope": "refresh"}, ttl=settings.refresh_token_ttl)
-    return {"user": public_user(user), "token": issue_access_token(user), "refresh_token": refresh}
+    return {
+        "user": public_user(user, accounts.of(session, user)),
+        "token": issue_access_token(user),
+        "refresh_token": refresh,
+    }
 
 
 @router.post("/refresh")
@@ -149,17 +160,11 @@ def refresh_token(payload: RefreshIn, session: Session = Depends(get_session)) -
     user = session.get(User, int(data.get("sub", 0)))
     if user is None or user.status != AccountStatus.ACTIVE:
         raise HTTPException(401, detail={"code": "BAD_REFRESH", "message": "账户状态异常"})
-    return {"user": public_user(user), "token": issue_access_token(user)}
+    return {"user": public_user(user, accounts.of(session, user)), "token": issue_access_token(user)}
 
 
 @router.post("/logout")
 def logout(request: Request, session: Session = Depends(get_session), user: User = Depends(current_user)) -> dict:
-    payload = getattr(request.state, "token_payload", {}) or {}
-    jti = payload.get("jti", "")
-    if jti:
-        if not session.exec(select(RevokedToken).where(RevokedToken.jti == jti)).first():
-            session.add(RevokedToken(jti=jti, expire_at=float(payload.get("exp", 0))))
-        session.commit()
     return {"ok": True}
 
 
@@ -170,7 +175,7 @@ def me(user: User = Depends(current_user), session: Session = Depends(get_sessio
     settle_positions(session, user)
     session.commit()
     session.refresh(user)
-    return {"user": public_user(user)}
+    return {"user": public_user(user, accounts.of(session, user))}
 
 
 @router.get("/handshake")
@@ -185,6 +190,4 @@ def handshake() -> dict:
         "server_time": int(time.time()),
         # 完整时钟快照：结算模式（T+1/T+0/调试）+ 时段，客户端启动即据此判定
         "session": st.to_dict(),
-        "signature_required": settings.signature_required,
-        "nonce": random_secret(8),
     }

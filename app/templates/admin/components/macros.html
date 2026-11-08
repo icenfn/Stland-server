@@ -1,0 +1,45 @@
+{#
+  后台页面模板的公共宏（P1-21）。
+
+  12 个页面模板此前各自手写一遍页头：
+
+      <div class="app-page-head">
+        <div class="app-page-title">零售账户</div>
+        <div class="app-page-desc" id="retailCount">--</div>
+        <div class="app-toolbar"> ...按钮/搜索框... </div>
+      </div>
+
+  结构完全一致，class 名却靠手抄 —— 一处样式调整要改 12 份，
+  而且实际已经抄出了差异：`config.html` 的 desc 与 toolbar 之间少了换行，
+  导致该页页头的垂直间距和别的页不一致。
+
+  抽成宏之后：结构只有一处定义，各页只声明「标题 / 副标题 / 工具栏内容」。
+  工具栏用调用块传入（{% call %}），因为每页的按钮与搜索框都不一样，
+  不适合做成参数。
+#}
+{% macro page_head(title, desc="", desc_id="") -%}
+<div class="app-page-head">
+  <div class="app-page-title">{{ title }}</div>
+  <div class="app-page-desc"{% if desc_id %} id="{{ desc_id }}"{% endif %}>{{ desc }}</div>
+  <div class="app-toolbar">{{ caller() if caller is defined else "" }}</div>
+</div>
+{%- endmacro %}
+
+{# 卡片容器：表格型页面统一「标题 + 副标题 + 内容」三段式 #}
+{% macro card(title, sub="") -%}
+<div class="mdui-card app-card">
+  <div class="app-card-head">
+    <div class="app-card-title">{{ title }}</div>
+    {% if sub %}<div class="app-card-sub">{{ sub }}</div>{% endif %}
+  </div>
+  {{ caller() if caller is defined else "" }}
+</div>
+{%- endmacro %}
+
+{# 空状态占位：列表无数据时的统一文案与留白 #}
+{% macro empty_state(text="暂无数据", hint="") -%}
+<div class="app-empty">
+  <div class="app-empty-text">{{ text }}</div>
+  {% if hint %}<div class="app-empty-hint">{{ hint }}</div>{% endif %}
+</div>
+{%- endmacro %}

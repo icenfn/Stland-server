@@ -257,11 +257,6 @@ RUNTIME_SPECS: dict[str, Spec] = {
 
     # ======================= 系统设置 · 安全与访问控制 =======================
     # 这两项与股市无关：换掉上面的模拟引擎它们照样成立，属于服务自身的安全边界。
-    "signature_required": Spec(
-        "signature_required", "请求签名校验", "bool", 
-        note="关闭后不再校验 HMAC 签名，仅建议联调期临时关闭",
-        group=GROUP_SYSTEM, section="security",
-    ),
     "login_fail_limit": Spec(
         "login_fail_limit", "登录失败锁定阈值", "int", 
         minimum=3, maximum=50, unit="次", note="连续失败达到该次数后锁定 5 分钟",

@@ -1,16 +1,11 @@
 <section class="app-page" id="page-simcfg">
-  <div class="app-page-head">
-    <div class="app-page-title">模拟配置</div>
-    <div class="app-page-desc">
-      模拟行情的引擎参数：行情推进节奏与波动强度。交易时段、结算、费用与账户默认值已归入「系统设置」。
-      保存后立即生效。
-    </div>
-    <div class="app-toolbar">
-      <button class="mdui-btn mdui-ripple" id="refreshSimCfg">刷新</button>
-      <button class="mdui-btn mdui-ripple" id="resetSimCfg">恢复本页默认</button>
-      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="saveSimCfg">保存修改</button>
-    </div>
-  </div>
+{% from "admin/components/macros.html" import page_head with context %}
+  {% call page_head("模拟配置", "模拟行情的引擎参数：行情推进节奏与波动强度。交易时段、结算、费用与账户默认值已归入「系统设置」。       保存后立即生效。", "") %}
+        <button class="mdui-btn mdui-ripple" id="refreshSimCfg">刷新</button>
+        <button class="mdui-btn mdui-ripple" id="resetSimCfg">恢复本页默认</button>
+        <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="saveSimCfg">保存修改</button>
+  {% endcall %}
+
 
   <!-- 分区渲染：行情引擎 → 交易时段 → 结算规则 → 交易费用 → 账户默认值。
        顺序由后端的 GROUP_SECTIONS 决定，前端不另维护一份映射，

@@ -1,23 +1,29 @@
-"""依赖注入：令牌鉴权、管理员鉴权、请求签名校验。
+"""依赖注入：交易账户令牌鉴权、管理员 Cookie 鉴权。
 
 本版把「管理员」从交易账户里彻底拆开：
 * `current_user` 只解析**交易账户**（User），令牌 role 为 retail/institution；
-* `admin_user` 只解析**管理员**（Admin），令牌 role 固定为 admin。
+* `admin_user` 只解析**管理员**（Admin），凭据是后台会话 Cookie。
 
-这样两条链路的鉴权互不干扰：管理员令牌拿去调交易接口会因找不到 User 而 401，
-交易账户令牌拿去调后台接口会因找不到 Admin 而 403 —— 不需要在业务代码里到处判断角色。
+后台凭据单一化（本轮重构）：
+    上一版 `admin_user` 同时接受 Cookie 与 `Authorization: Bearer`，而前端又把
+    登录返回的 token 存进 localStorage 再逐请求带回来 —— 两条凭据并存意味着
+    两套失效路径、两处 XSS 暴露面。现在后台网页**只用 HttpOnly Cookie**：
+    页面脚本读不到凭据，XSS 也偷不走管理权限，管理员令牌一共只签发一处失败机会。
+
+这样两条链路的鉴权互不干扰：管理员 Cookie 拿去调交易接口没有 Bearer 头，
+直接 401；交易账户令牌拿去调后台接口没有后台会话，直接 401。
 """
 from __future__ import annotations
 
 import time
 
 from fastapi import Depends, Header, HTTPException, Request, status
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from ..config import settings
 from ..db import get_session
-from ..models import AccountStatus, Admin, RevokedToken, User
-from ..security import TokenError, body_digest, decode_token, verify_signature
+from ..models import AccountStatus, Admin, User
+from ..security import TokenError, decode_token
 from . import admin_session
 
 
@@ -47,7 +53,7 @@ async def current_user(
     authorization: str = Header(default=""),
     session: Session = Depends(get_session),
 ) -> User:
-    """解析交易账户令牌，校验吊销状态与账户状态。"""
+    """解析交易账户令牌，校验账户状态。"""
     token = _bearer_token(authorization)
     try:
         payload = decode_token(token)
@@ -56,10 +62,6 @@ async def current_user(
 
     if payload.get("role") == "admin":
         raise _forbidden("管理员账户不能访问交易接口")
-
-    jti = payload.get("jti", "")
-    if jti and session.exec(select(RevokedToken).where(RevokedToken.jti == jti)).first():
-        raise _unauthorized("令牌已失效，请重新登录")
 
     user = session.get(User, int(payload.get("sub", 0)))
     if user is None:
@@ -74,119 +76,25 @@ async def current_user(
 
 async def admin_user(
     request: Request,
-    authorization: str = Header(default=""),
     session: Session = Depends(get_session),
 ) -> Admin:
-    """解析管理端身份。两条凭据都接受：
+    """解析管理端身份：**只认后台会话 Cookie**。
 
-    * **后台网页的会话 Cookie**（`stland_admin`）：登录页登录成功后由服务端下发，
-      后台面板里每个 /api/admin/* 请求都靠它过鉴权。
-    * **Bearer 令牌**：给脚本、CI 或用 curl 直接调接口时用。
-
-    为什么必须加 Cookie 这条：上一版把登录迁到独立页面并改用 HttpOnly Cookie，
-    但这里仍然只读 `Authorization` 头。于是「登录成功 → 跳 /admin → 面板拉数据」
-    每一步都因为浏览器不会自动带 Authorization 而 401，前端如实显示
-    「缺少访问令牌」，用户就卡在登录页进不去。
-
-    Cookie 命中时还要再查一次 `admin` 表，确认账号仍然是启用状态 ——
+    Cookie 命中后还要再查一次 `admin` 表，确认账号仍然是启用状态 ——
     会话表只说明「这个浏览器登录过」，不说明「这个人现在还有权限」。
     """
-    # ① 后台网页：靠 HttpOnly Cookie 里的会话号认人
-    admin_id = admin_session.session_admin_id(admin_session.request_sid(request))
-    if admin_id is not None:
-        admin = session.get(Admin, admin_id)
-        if admin is None or not admin.is_active:
-            # 会话还在但账号被停用 / 删除：顺手撤销，让浏览器回登录页
-            admin_session.drop_session(admin_session.request_sid(request))
-            raise _unauthorized("管理员账户不存在或已停用")
-        request.state.admin_via = "cookie"
-        return admin
+    sid = admin_session.request_sid(request)
+    admin_id = admin_session.session_admin_id(sid)
+    if admin_id is None:
+        raise _unauthorized("缺少访问令牌")
 
-    # ② 脚本 / CI：Bearer 令牌
-    if authorization.lower().startswith("bearer "):
-        return _admin_from_token(authorization, request, session)
-
-    raise _unauthorized("缺少访问令牌")
-
-
-def _admin_from_token(
-    authorization: str,
-    request: Request,
-    session: Session,
-) -> Admin:
-    """解析 Bearer 令牌，只认 `admin` 表。"""
-    token = _bearer_token(authorization)
-    try:
-        payload = decode_token(token)
-    except TokenError as exc:
-        raise _unauthorized(str(exc)) from exc
-
-    if payload.get("role") != "admin":
-        raise _forbidden("仅管理端可访问")
-
-    jti = payload.get("jti", "")
-    if jti and session.exec(select(RevokedToken).where(RevokedToken.jti == jti)).first():
-        raise _unauthorized("令牌已失效，请重新登录")
-
-    admin = session.get(Admin, int(payload.get("sub", 0)))
+    admin = session.get(Admin, admin_id)
     if admin is None or not admin.is_active:
+        # 会话还在但账号被停用 / 删除：顺手撤销，让浏览器回登录页
+        admin_session.drop_session(sid)
         raise _unauthorized("管理员账户不存在或已停用")
-    request.state.token_payload = payload
+    request.state.admin_via = "cookie"
     return admin
-
-
-async def signed_request(
-    request: Request,
-    x_stland_ts: str = Header(default=""),
-    x_stland_nonce: str = Header(default=""),
-    x_stland_sign: str = Header(default=""),
-    x_stland_user: str = Header(default=""),
-) -> None:
-    """校验请求签名（防篡改 + 防重放）。
-
-    客户端对 `method\\npath\\nts\\nnonce\\nsha256(body)\\nuser_id` 做 HMAC-SHA256。
-    """
-    if not settings.signature_required:
-        return
-    body = await request.body()
-    ok, reason = verify_signature(
-        method=request.method,
-        path=request.url.path,
-        ts=x_stland_ts,
-        nonce=x_stland_nonce,
-        body_sha256=body_digest(body),
-        signature=x_stland_sign,
-        user_id=x_stland_user,
-    )
-    if not ok:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "BAD_SIGNATURE", "message": reason},
-        )
-
-
-async def optional_signature(
-    request: Request,
-    x_stland_ts: str = Header(default=""),
-    x_stland_nonce: str = Header(default=""),
-    x_stland_sign: str = Header(default=""),
-    x_stland_user: str = Header(default=""),
-) -> None:
-    """签名「可带则校验」：用于登录前就要用的公开行情接口。
-
-    为什么需要它：行情与个股查询本身不含账户数据，不该因为「没登录 / 没算签名」
-    就被挡在门外 —— 否则新用户打开 App 第一屏就是一片空白，连行情都看不到。
-    但携带了签名的请求仍然要验签，避免公开接口被当成绕过签名的入口。
-    """
-    if not x_stland_sign:
-        return
-    await signed_request(
-        request=request,
-        x_stland_ts=x_stland_ts,
-        x_stland_nonce=x_stland_nonce,
-        x_stland_sign=x_stland_sign,
-        x_stland_user=x_stland_user,
-    )
 
 
 def require_role(*roles: str):
@@ -200,11 +108,16 @@ def require_role(*roles: str):
     return _guard
 
 
-def issue_access_token(user: User) -> dict:
+def issue_admin_token(admin: Admin) -> dict:
+    """给脚本 / CI 换发的管理员令牌（后台网页本身只用 Cookie，不消费它）。
+
+    保留这个签发点是为了让自动化脚本有一条不依赖浏览器 Cookie 的路径；
+    但 `admin_user` 仍然只认 Cookie —— 两条凭据不会再混用在同一个入口。
+    """
     from ..security import create_token
 
     token = create_token(
-        {"sub": str(user.id), "role": user.role.value, "username": user.username},
+        {"sub": str(admin.id), "role": "admin", "username": admin.username},
         ttl=settings.access_token_ttl,
     )
     return {
@@ -215,11 +128,11 @@ def issue_access_token(user: User) -> dict:
     }
 
 
-def issue_admin_token(admin: Admin) -> dict:
+def issue_access_token(user: User) -> dict:
     from ..security import create_token
 
     token = create_token(
-        {"sub": str(admin.id), "role": "admin", "username": admin.username},
+        {"sub": str(user.id), "role": user.role.value, "username": user.username},
         ttl=settings.access_token_ttl,
     )
     return {

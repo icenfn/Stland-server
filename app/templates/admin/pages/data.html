@@ -1,11 +1,9 @@
 <section class="app-page" id="page-data">
-  <div class="app-page-head">
-    <div class="app-page-title">数据初始化</div>
-    <div class="app-page-desc">冷启动只建表与引导管理员，标的需要在这里显式注入</div>
-    <div class="app-toolbar">
-      <button class="mdui-btn mdui-ripple" id="refreshSeed">刷新状态</button>
-    </div>
-  </div>
+{% from "admin/components/macros.html" import page_head with context %}
+  {% call page_head("数据初始化", "冷启动只建表与引导管理员，标的需要在这里显式注入", "") %}
+        <button class="mdui-btn mdui-ripple" id="refreshSeed">刷新状态</button>
+  {% endcall %}
+
 
   <div class="mdui-card app-card">
     <div class="app-card-head">

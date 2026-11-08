@@ -1,11 +1,8 @@
-"""安全层：口令散列、JWT 签发/校验、请求签名（HMAC-SHA256）与重放防护。
+"""安全层：口令散列、JWT 签发/校验、JWT 签发/校验。
 
 设计要点（生产可用）：
 * 口令使用 PBKDF2-HMAC-SHA256 + 每用户随机盐 + 高迭代次数，绝不明文存储；
 * 访问令牌为 HS256 JWT，含 jti / iat / exp / role，服务端支持即时吊销；
-* 每个业务请求携带 ``X-Stland-Sign = HMAC-SHA256(secret, canonical)``，
-  canonical 由「方法 / 路径 / 时间戳 / 随机数 / 请求体摘要 / 用户标识」按行拼接，
-  防止抓包篡改与重放；时间窗口内的随机数只允许使用一次。
 
 JWT 交给 PyJWT：算法轮换、kid、clock skew、alg=none 等边界由其处理并测试，
 自研编解码只会带来长期维护负担。token 为 HS256 + 标准 claims。
@@ -110,67 +107,11 @@ def decode_token(token: str, secret: str | None = None) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # 请求签名
 # --------------------------------------------------------------------------- #
-class NonceCache:
-    """内存窗口内 nonce 去重；多实例部署时可替换为 Redis 实现。"""
-
-    def __init__(self, window: int = 300) -> None:
-        self.window = window
-        self._seen: dict[str, float] = {}
-
-    def check_and_add(self, nonce: str) -> bool:
-        now = time.time()
-        expired = [k for k, expire in self._seen.items() if expire < now]
-        for key in expired:
-            self._seen.pop(key, None)
-        if not nonce or len(nonce) > 128 or nonce in self._seen:
-            return False
-        self._seen[nonce] = now + self.window
-        return True
 
 
-nonce_cache = NonceCache(window=max(60, settings.clock_skew * 5))
 
 
-def body_digest(body: bytes) -> str:
-    return hashlib.sha256(body or b"").hexdigest()
 
-
-def canonical_string(
-    method: str, path: str, ts: str, nonce: str, body_sha256: str, user_id: str = ""
-) -> str:
-    return NEWLINE.join([method.upper(), path, ts, nonce, body_sha256, user_id])
-
-
-def compute_signature(
-    method: str, path: str, ts: str, nonce: str, body_sha256: str, user_id: str = ""
-) -> str:
-    canonical = canonical_string(method, path, ts, nonce, body_sha256, user_id)
-    return hmac.new(settings.sign_secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
-
-
-def verify_signature(
-    *,
-    method: str,
-    path: str,
-    ts: str,
-    nonce: str,
-    body_sha256: str,
-    signature: str,
-    user_id: str = "",
-) -> tuple[bool, str]:
-    """返回 (是否通过, 失败原因)。"""
-    try:
-        ts_int = int(ts)
-    except (TypeError, ValueError):
-        return False, "时间戳格式错误"
-    if abs(time.time() - ts_int) > settings.clock_skew:
-        return False, "时间戳超出允许窗口"
-    expected = compute_signature(method, path, ts, nonce, body_sha256, user_id)
-    if not hmac.compare_digest(expected, signature or ""):
-        return False, "请求签名校验失败"
-    if not nonce_cache.check_and_add(nonce):
-        return False, "重复的请求随机数（疑似重放）"
-    return True, ""
 
 
 def random_secret(n: int = 32) -> str:

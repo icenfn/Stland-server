@@ -1,13 +1,11 @@
 <section class="app-page" id="page-engine">
-  <div class="app-page-head">
-    <div class="app-page-title">模拟引擎</div>
-    <div class="app-page-desc">行情推进的开关、节奏与撮合时段</div>
-    <div class="app-toolbar">
-      <button class="mdui-btn mdui-ripple" id="refreshEngine">刷新</button>
-      <button class="mdui-btn mdui-ripple" id="resetEngine">重置行情</button>
-      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="toggleEngine">开启引擎</button>
-    </div>
-  </div>
+{% from "admin/components/macros.html" import page_head with context %}
+  {% call page_head("模拟引擎", "行情推进的开关、节奏与撮合时段", "") %}
+        <button class="mdui-btn mdui-ripple" id="refreshEngine">刷新</button>
+        <button class="mdui-btn mdui-ripple" id="resetEngine">重置行情</button>
+        <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="toggleEngine">开启引擎</button>
+  {% endcall %}
+
 
   <div class="app-kpi-grid" id="engineKpis"></div>
 

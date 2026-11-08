@@ -78,23 +78,8 @@ class User(SQLModel, table=True):
     role: Role = Field(default=Role.RETAIL, index=True)
     status: AccountStatus = Field(default=AccountStatus.ACTIVE, index=True)
 
-    cash: float = Field(default=0.0)            # 可用资金
-    frozen_cash: float = Field(default=0.0)     # 挂单冻结资金
-    market_value: float = Field(default=0.0)    # 持仓市值（快照）
-    total_asset: float = Field(default=0.0)     # 总资产（快照）
-    realized_pnl: float = Field(default=0.0)    # 已实现盈亏
-    fee_paid: float = Field(default=0.0)        # 累计费用
-
-    # 佣金条件（逐账户可配）
-    # None 表示「跟随角色默认」：零售万3不免5、机构万3免5（见 services/fees.py）。
-    # 为什么拆成两个字段：「费率」与「最低佣金」是两个独立维度 —— 小额委托时
-    # 零售会被 5 元下限抬高实际成本，机构不会；只存费率无法表达「免不免 5」。
-    commission_rate: Optional[float] = Field(default=None)
-    commission_min: Optional[float] = Field(default=None)
-
-    # 机构账户专有额度（零售恒为 0）
-    credit_limit: float = Field(default=0.0)
-
+    # 账务字段已迁到 `Account`（见下方）：身份与资金是两个变更频率完全不同的
+    # 关注点 —— 改登录策略不该动到余额所在的行，对账也不该被口令字段干扰。
     # 风险偏好（0 = 从未测评）
     # 只存「等级 + 测评时间」：总分是问卷内部口径，对业务和用户都没有意义，
     # 存下来反而容易被误解成「分数越高越好」的评分体系；答题明细一律不落库。
@@ -104,6 +89,37 @@ class User(SQLModel, table=True):
     fail_count: int = Field(default=0)          # 连续登录失败次数
     locked_until: float = Field(default=0.0)    # 锁定到期时间戳
     last_login_at: float = Field(default=0.0)
+
+    created_at: float = Field(default_factory=now_ts)
+    updated_at: float = Field(default_factory=now_ts)
+
+
+class Account(SQLModel, table=True):
+    """账务账户：一个交易账户的**全部资金状态**。
+
+    与身份分离：``User`` 只管「我是谁」，本表只管「我有多少钱」，以 ``user_id`` 一对一。
+
+    * ``total_asset`` 是派生快照（可用 + 冻结 + 市值），保留它是为了后台排行榜
+      能直接按列排序；写入方必须调 ``services.accounts.recompute`` 重算；
+    * ``commission_rate`` / ``commission_min`` 为 ``None`` 表示跟随角色默认，
+      显式赋值才覆盖，这样给单个客户议价不会把默认口径固化进历史数据。
+    """
+
+    __tablename__ = "account"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, unique=True)
+
+    cash: float = Field(default=0.0)
+    frozen_cash: float = Field(default=0.0)
+    market_value: float = Field(default=0.0)
+    total_asset: float = Field(default=0.0)
+    realized_pnl: float = Field(default=0.0)
+    fee_paid: float = Field(default=0.0)
+
+    commission_rate: Optional[float] = Field(default=None)
+    commission_min: Optional[float] = Field(default=None)
+    credit_limit: float = Field(default=0.0)
 
     created_at: float = Field(default_factory=now_ts)
     updated_at: float = Field(default_factory=now_ts)
@@ -381,13 +397,42 @@ class CashFlow(SQLModel, table=True):
     created_at: float = Field(default_factory=now_ts, index=True)
 
 
-class RevokedToken(SQLModel, table=True):
-    """登出后的令牌黑名单（按 jti 精确吊销）。"""
 
-    id: Optional[int] = Field(default=None, primary_key=True)
-    jti: str = Field(index=True, unique=True, max_length=40)
-    expire_at: float = 0.0
-    created_at: float = Field(default_factory=now_ts)
+class AdminSession(SQLModel, table=True):
+    """管理后台会话（持久化）。
+
+    为什么不放进程内 dict：① ``uvicorn --workers > 1`` 时会话不共享，
+    在 A worker 登录、下个请求落到 B worker 就成了未登录；② 重启即全员掉线。
+    只存会话归属，不存任何凭据材料。
+    """
+
+    __tablename__ = "admin_session"
+
+    sid: str = Field(primary_key=True, max_length=64)
+    admin_id: int = Field(index=True)
+    issued_at: float = Field(default_factory=now_ts)
+    expires_at: float = Field(index=True)
+    last_seen_at: float = Field(default_factory=now_ts)
+    user_agent: str = Field(default="", max_length=200)
+    client_ip: str = Field(default="", max_length=64)
+
+
+class IdempotencyKey(SQLModel, table=True):
+    """幂等键：让「资金调整 / 下单」这类会改钱的操作可安全重试。
+
+    键由调用方提供（``client_request_id``），服务端只保证「同一个键只生效一次」，
+    不猜业务语义；``response`` 存首次结果快照，重试时原样回放。
+    """
+
+    __tablename__ = "idempotency_key"
+
+    key: str = Field(primary_key=True, max_length=120)   # f"{scope}:{client_request_id}"
+    scope: str = Field(index=True, max_length=40)
+    actor_id: int = Field(default=0, index=True)
+    status_code: int = Field(default=200)
+    response: str = Field(default="", max_length=8000)
+    created_at: float = Field(default_factory=now_ts, index=True)
+    expires_at: float = Field(default=0.0, index=True)
 
 
 def utc_str(ts: float | None = None) -> str:

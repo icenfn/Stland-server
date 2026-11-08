@@ -46,12 +46,12 @@ class Settings:
 
         # ---- 安全 ----
         self.jwt_secret: str = os.getenv("STLAND_JWT_SECRET", "dev-jwt-secret-stland")
-        self.sign_secret: str = os.getenv("STLAND_SIGN_SECRET", "dev-sign-secret-stland")
         self.access_token_ttl: int = int(os.getenv("STLAND_ACCESS_TOKEN_TTL", "7200"))
         self.refresh_token_ttl: int = int(os.getenv("STLAND_REFRESH_TOKEN_TTL", str(60 * 60 * 24 * 14)))
-        self.clock_skew: int = int(os.getenv("STLAND_CLOCK_SKEW", "60"))
-        self.signature_required: bool = _bool("STLAND_SIGNATURE_REQUIRED", True)
         self.login_fail_limit: int = int(os.getenv("STLAND_LOGIN_FAIL_LIMIT", "8"))
+        # 后台会话 Cookie 是否只走 HTTPS。生产（反代 TLS 终结）应设 1；
+        # 本地 http 调试默认关闭，否则浏览器不回传 Cookie，后台永远登录不上。
+        self.admin_cookie_secure: bool = os.getenv("STLAND_ADMIN_COOKIE_SECURE", "0") == "1"
 
         # ---- 交易 ----
         self.seed_cash: float = float(os.getenv("STLAND_SEED_CASH", "1000000"))

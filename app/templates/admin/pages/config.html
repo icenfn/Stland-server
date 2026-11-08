@@ -1,15 +1,11 @@
 <section class="app-page" id="page-config">
-  <div class="app-page-head">
-    <div class="app-page-title">系统设置</div>
-    <div class="app-page-desc">
-      服务自身的安全开关，以及整个模拟盘的市场规则：交易时段、结算方式、交易费用和新账户默认值。
-      保存后立即生效。
-    </div>    <div class="app-toolbar">
-      <button class="mdui-btn mdui-ripple" id="refreshCfg">刷新</button>
-      <button class="mdui-btn mdui-ripple" id="resetCfg">恢复本页默认</button>
-      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="saveCfg">保存修改</button>
-    </div>
-  </div>
+{% from "admin/components/macros.html" import page_head with context %}
+  {% call page_head("系统设置", "服务自身的安全开关，以及整个模拟盘的市场规则：交易时段、结算方式、交易费用和新账户默认值。       保存后立即生效。", "") %}
+        <button class="mdui-btn mdui-ripple" id="refreshCfg">刷新</button>
+        <button class="mdui-btn mdui-ripple" id="resetCfg">恢复本页默认</button>
+        <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="saveCfg">保存修改</button>
+  {% endcall %}
+
 
   <!-- 分区渲染：顺序由后端 GROUP_SECTIONS 决定，新增配置项只需在
        runtime_config.py 标好 section 就会自动归位。 -->

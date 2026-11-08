@@ -1,12 +1,10 @@
 <section class="app-page" id="page-admins">
-  <div class="app-page-head">
-    <div class="app-page-title">管理员</div>
-    <div class="app-page-desc">后台账号独立存表，与交易账户互不相干</div>
-    <div class="app-toolbar">
-      <button class="mdui-btn mdui-ripple" id="refreshAdmins">刷新</button>
-      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent" id="addAdmin">新建管理员</button>
-    </div>
-  </div>
+{% from "admin/components/macros.html" import page_head with context %}
+  {% call page_head("管理员", "后台账号独立存表，与交易账户互不相干", "") %}
+        <button class="mdui-btn mdui-ripple" id="refreshAdmins">刷新</button>
+        <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent" id="addAdmin">新建管理员</button>
+  {% endcall %}
+
 
   <div class="mdui-card">
     <div class="mdui-table-fluid">

@@ -22,9 +22,9 @@ from sqlmodel import Session, select
 from ..db import get_session
 from ..engine.market import market_engine
 from ..models import Stock, User, WatchGroup, WatchItem
-from ..services.deps import current_user, signed_request
+from ..services.deps import current_user
 
-router = APIRouter(prefix="/api/watch", tags=["watch"])
+router = APIRouter(prefix="/api/v1/watch", tags=["watch"])
 
 DEFAULT_GROUP_NAME = "默认分组"
 
@@ -46,7 +46,7 @@ def _group_view(g: WatchGroup, count: int) -> dict:
     return {"id": g.id, "name": g.name, "sort": g.sort, "count": count}
 
 
-@router.get("/groups", dependencies=[Depends(signed_request)])
+@router.get("/groups")
 def list_groups(session: Session = Depends(get_session), user: User = Depends(current_user)) -> dict:
     """分组列表（含每组的自选数量）。账号首次访问自动建默认分组。"""
     _ensure_default_group(session, user.id or 0)
@@ -63,7 +63,7 @@ class GroupIn(BaseModel):
     name: str = Field(min_length=1, max_length=12)
 
 
-@router.post("/groups", dependencies=[Depends(signed_request)])
+@router.post("/groups")
 def create_group(
     payload: GroupIn,
     session: Session = Depends(get_session),
@@ -87,7 +87,7 @@ def create_group(
     return {"ok": True, "group": _group_view(group, 0), "existed": False}
 
 
-@router.patch("/groups/{group_id}", dependencies=[Depends(signed_request)])
+@router.patch("/groups/{group_id}")
 def rename_group(
     group_id: int,
     payload: GroupIn,
@@ -124,7 +124,7 @@ def rename_group(
     return {"ok": True, "group": _group_view(group, count), "changed": True}
 
 
-@router.delete("/groups/{group_id}", dependencies=[Depends(signed_request)])
+@router.delete("/groups/{group_id}")
 def delete_group(
     group_id: int,
     session: Session = Depends(get_session),
@@ -177,7 +177,7 @@ class GroupOrderIn(BaseModel):
     ids: list[int] = Field(min_length=1)
 
 
-@router.patch("/groups/order", dependencies=[Depends(signed_request)])
+@router.patch("/groups/order")
 def reorder_groups(
     payload: GroupOrderIn,
     session: Session = Depends(get_session),
@@ -238,7 +238,7 @@ def _add_membership(session: Session, user_id: int, group_id: int, code: str) ->
     return True
 
 
-@router.post("/items", dependencies=[Depends(signed_request)])
+@router.post("/items")
 def add_item(
     payload: ItemIn,
     session: Session = Depends(get_session),
@@ -266,7 +266,7 @@ class BatchItemIn(BaseModel):
     group_ids: list[int] = Field(min_length=1)
 
 
-@router.post("/items/batch", dependencies=[Depends(signed_request)])
+@router.post("/items/batch")
 def add_item_batch(
     payload: BatchItemIn,
     session: Session = Depends(get_session),
@@ -296,7 +296,7 @@ def add_item_batch(
     return {"ok": True, "watching": True, "group_ids": [g.id for g in targets]}
 
 
-@router.delete("/items/{code}", dependencies=[Depends(signed_request)])
+@router.delete("/items/{code}")
 def remove_item(
     code: str,
     session: Session = Depends(get_session),
@@ -317,7 +317,7 @@ def remove_item(
     return {"ok": True, "watching": False, "removed": len(rows)}
 
 
-@router.get("/items", dependencies=[Depends(signed_request)])
+@router.get("/items")
 def list_items(
     group_id: int | None = Query(default=None),
     session: Session = Depends(get_session),
@@ -357,7 +357,7 @@ def list_items(
     return {"items": items, "total": len(items)}
 
 
-@router.get("/status/{code}", dependencies=[Depends(signed_request)])
+@router.get("/status/{code}")
 def watch_status(
     code: str,
     session: Session = Depends(get_session),

@@ -36,25 +36,6 @@ if settings.db_url.startswith("sqlite"):
         cur.close()
 
 
-# 已废弃的表：审计日志、风险测评档案、系统事件（功能已全部删除）
-_LEGACY_TABLES = ("auditlog", "riskassessment", "systemevent")
-
-
-def _purge_legacy() -> None:
-    """清理旧结构残留。
-
-    1) 删除已废弃的表（功能已移除，留着只会误导后来人）；
-    2) 删除 `user` 表里 role=admin 的历史行 —— 管理员已迁到独立的 `admin` 表，
-       而新 Role 枚举只有 retail/institution，旧行留着会在反序列化时报枚举错误。
-       这些旧管理员账户没有资金也没有持仓，直接丢弃最安全。
-    """
-    with engine.begin() as conn:
-        for table in _LEGACY_TABLES:
-            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
-        try:
-            conn.execute(text("DELETE FROM user WHERE role = 'admin'"))
-        except Exception:  # 表还不存在（全新库）时忽略
-            pass
 
 
 def _align_columns() -> None:
@@ -67,7 +48,7 @@ def _align_columns() -> None:
 
     这里只做「加列」这一种安全变更：缺失的列按模型定义补上（NOT NULL 带默认值时
     用 DEFAULT 填充存量行）。删列/改类型不在此处理 —— 那属于真正的不兼容变更，
-    应由 `_purge_legacy` 显式的重建逻辑承担。
+    应由版本化迁移（Alembic）承担。
     """
     from sqlalchemy import inspect
 
@@ -98,10 +79,9 @@ def _align_columns() -> None:
 
 
 def init_db() -> None:
-    """建表（幂等）、对齐新增列，并清理旧结构。"""
+    """建表（幂等）并对齐已存在表的新增列。"""
     from . import models  # noqa: F401  触发元数据注册
 
-    _purge_legacy()
     SQLModel.metadata.create_all(engine)
     _align_columns()
 

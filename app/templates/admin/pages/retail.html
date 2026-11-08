@@ -1,13 +1,11 @@
 <section class="app-page" id="page-retail">
-  <div class="app-page-head">
-    <div class="app-page-title">零售账户</div>
-    <div class="app-page-desc" id="retailCount">--</div>
-    <div class="app-toolbar">
-      <input class="app-select" id="retailSearch" placeholder="按登录名或昵称搜索" style="width:200px" />
-      <button class="mdui-btn mdui-ripple" id="refreshRetail">刷新</button>
-      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent" id="addRetail">新建账户</button>
-    </div>
-  </div>
+{% from "admin/components/macros.html" import page_head with context %}
+  {% call page_head("零售账户", "--", "retailCount") %}
+        <input class="app-select" id="retailSearch" placeholder="按登录名或昵称搜索" style="width:200px" />
+        <button class="mdui-btn mdui-ripple" id="refreshRetail">刷新</button>
+        <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent" id="addRetail">新建账户</button>
+  {% endcall %}
+
 
   <div class="mdui-card">
     <div class="mdui-table-fluid">

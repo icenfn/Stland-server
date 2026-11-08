@@ -19,7 +19,7 @@ import pytest  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 
 from app.config import settings  # noqa: E402
-from app.models import Order, OrderSide, OrderStatus, OrderType, Role, Trade, User  # noqa: E402
+from app.models import Account, Order, OrderSide, OrderStatus, OrderType, Role, Trade, User  # noqa: E402
 from app.services import risk  # noqa: E402
 
 
@@ -32,10 +32,13 @@ def db():
 
 
 def _user(db: Session, role: Role, cash: float = 1e9) -> User:
-    u = User(username=f"u{role.value}{time.time()}", role=role, cash=cash)
+    """建身份 + 账务两行（资金字段已迁到 Account）。"""
+    u = User(username=f"u{role.value}{time.time()}", role=role)
     db.add(u)
     db.commit()
     db.refresh(u)
+    db.add(Account(user_id=u.id, cash=cash, total_asset=cash))
+    db.commit()
     return u
 
 

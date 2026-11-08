@@ -23,6 +23,7 @@ from ..engine import orderbook, quote_source
 from ..engine.market import market_engine
 from ..engine.session import current_session
 from ..models import (
+    Account,
     TradeSource,
     AccountStatus,
     CashFlow,
@@ -35,7 +36,7 @@ from ..models import (
     Trade,
     User,
 )
-from . import risk
+from . import accounts, risk
 from .events import hub, order_event
 
 logger = logging.getLogger("stland.trading")
@@ -62,15 +63,17 @@ def _get_position(session: Session, user_id: int, code: str) -> Position | None:
 
 
 def _add_flow(
-    session: Session, user: User, biz_type: str, amount: float, before: float, ref: str, remark: str
+    session: Session, acct: Account, biz_type: str, amount: float, before: float, ref: str, remark: str
 ) -> None:
+    """写一条资金流水。``acct`` 是账务行本身 —— 流水只会由改钱的那一侧产生，
+    拿 Account 当参数可以保证 ``balance_after`` 取的一定是同一个对象上的余额。"""
     session.add(
         CashFlow(
-            user_id=user.id or 0,
+            user_id=acct.user_id,
             biz_type=biz_type,
             amount=round_money(amount),
             balance_before=round_money(before),
-            balance_after=round_money(user.cash),
+            balance_after=round_money(acct.cash),
             ref_no=ref,
             remark=remark,
         )
@@ -165,23 +168,25 @@ def place_order(
         raise TradeError(str(exc), exc.code) from exc
 
     # ---- 冻结 ----
+    # 账务行在这里取一次：后面所有资金变动都写这一行，不再回写 User。
+    acct = accounts.of(session, user)
     frozen_amount = 0.0
     if side_enum == OrderSide.BUY:
         need = price * quantity
-        fee_est = calc_fee(need, "buy", *resolve_commission(user)).total
-        available_cash = user.cash + (user.credit_limit if user.role.value == "institution" else 0.0)
+        fee_est = calc_fee(need, "buy", *resolve_commission(user, acct)).total
+        available_cash = accounts.available_cash(acct, user.role.value)
         if need + fee_est > available_cash + 1e-6:
             raise TradeError(
                 f"可用资金不足：需要 {need + fee_est:,.2f} 元，可动用 {available_cash:,.2f} 元",
                 "INSUFFICIENT_FUNDS",
             )
-        before = user.cash
+        before = acct.cash
         frozen_amount = round_money(need + fee_est)
-        user.cash = round_money(user.cash - frozen_amount)
-        user.frozen_cash = round_money(user.frozen_cash + frozen_amount)
-        user.updated_at = time.time()
-        session.add(user)
-        _add_flow(session, user, "freeze", -frozen_amount, before, "", f"{code} 买入冻结")
+        acct.cash = round_money(acct.cash - frozen_amount)
+        acct.frozen_cash = round_money(acct.frozen_cash + frozen_amount)
+        accounts.recompute(acct)
+        session.add(acct)
+        _add_flow(session, acct, "freeze", -frozen_amount, before, "", f"{code} 买入冻结")
     else:
         pos = _get_position(session, user.id or 0, code)
         if pos is None or pos.available < quantity:
@@ -247,6 +252,7 @@ def _settle_resting(
     other = session.get(User, resting.user_id)
     if other is None:
         return
+    other_acct = accounts.of(session, other)
 
     amount = price * quantity
     pos = _get_position(session, other.id or 0, stock.code)
@@ -256,7 +262,7 @@ def _settle_resting(
             # 挂单时已冻结持仓，理论上不会走到这里；真发生说明数据不一致，
             # 宁可跳过这笔划转，也不能把持仓算成负数。
             return
-        fee = calc_fee(amount, "sell", *resolve_commission(other))
+        fee = calc_fee(amount, "sell", *resolve_commission(other, other_acct))
         prev_cost = pos.avg_cost
         pos.quantity -= quantity
         pos.frozen = max(0, pos.frozen - quantity)
@@ -266,10 +272,12 @@ def _settle_resting(
         pos.updated_at = time.time()
         session.add(pos)
         credit = amount - fee.total
-        before = other.cash
-        other.cash = round_money(other.cash + credit)
+        before = other_acct.cash
+        other_acct.cash = round_money(other_acct.cash + credit)
+        accounts.recompute(other_acct)
+        session.add(other_acct)
         _add_flow(
-            session, other, "trade", credit, before, resting.order_no,
+            session, other_acct, "trade", credit, before, resting.order_no,
             f"{stock.code} 卖出成交",
         )
         pnl = (price - prev_cost) * quantity - fee.total
@@ -278,7 +286,7 @@ def _settle_resting(
             pos = Position(
                 user_id=other.id or 0, code=stock.code, quantity=0, available=0, frozen=0
             )
-        fee = calc_fee(amount, "buy", *resolve_commission(other))
+        fee = calc_fee(amount, "buy", *resolve_commission(other, other_acct))
         new_qty = pos.quantity + quantity
         cost_new = pos.avg_cost * pos.quantity + amount + fee.total
         pos.avg_cost = round(cost_new / new_qty, 4) if new_qty else 0.0
@@ -290,11 +298,11 @@ def _settle_resting(
         pos.updated_at = time.time()
         session.add(pos)
         # 挂单时已冻结资金，这里把实际花费从冻结池核销（现金早已扣除）
-        other.frozen_cash = round_money(
-            max(0.0, other.frozen_cash - (amount + fee.total))
+        other_acct.frozen_cash = round_money(
+            max(0.0, other_acct.frozen_cash - (amount + fee.total))
         )
-        other.updated_at = time.time()
-        session.add(other)
+        accounts.recompute(other_acct)
+        session.add(other_acct)
         pnl = 0.0
 
     session.add(
@@ -414,12 +422,13 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
     prev_filled = order.filled_quantity
     prev_avg = order.avg_fill_price or 0.0
     pos = _get_position(session, user.id or 0, stock.code)
+    acct = accounts.of(session, user)
 
     for f in fills:
         price = float(f["price"])
         quantity = int(f["quantity"])
         amount = price * quantity
-        fee = calc_fee(amount, taker_side.value, *resolve_commission(user))
+        fee = calc_fee(amount, taker_side.value, *resolve_commission(user, acct))
         total_amount += amount
         total_fee += fee.commission
         total_tax += fee.stamp_tax
@@ -443,7 +452,9 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             pos.last_price = price
             pos.updated_at = time.time()
             session.add(pos)
-            user.cash = round_money(user.cash)  # 资金已在冻结时扣除
+            acct.cash = round_money(acct.cash)  # 资金已在冻结时扣除
+            accounts.recompute(acct)
+            session.add(acct)
         else:
             if pos is None:
                 continue
@@ -457,10 +468,12 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             pos.updated_at = time.time()
             session.add(pos)
             credit = amount - fee.total
-            before = user.cash
-            user.cash = round_money(user.cash + credit)
+            before = acct.cash
+            acct.cash = round_money(acct.cash + credit)
+            accounts.recompute(acct)
+            session.add(acct)
             _add_flow(
-                session, user, "trade", credit, before, order.order_no,
+                session, acct, "trade", credit, before, order.order_no,
                 f"{stock.code} 卖出成交",
             )
 
@@ -521,7 +534,7 @@ def _match_order(session: Session, user: User, order: Order, stock: Stock, quote
             remain_qty = order.quantity - order.filled_quantity
             remain_amt = order.price * remain_qty
             keep_frozen = round_money(
-                remain_amt + calc_fee(remain_amt, "buy", *resolve_commission(user)).total
+                remain_amt + calc_fee(remain_amt, "buy", *resolve_commission(user, acct)).total
             )
 
     session.add(order)
@@ -547,25 +560,26 @@ def _release_freeze(
     """
     if order.side != OrderSide.BUY or order.frozen_amount <= 0:
         return
+    acct = accounts.of(session, user)
     frozen = order.frozen_amount
     consumed = min(frozen, max(0.0, spent))
     keep = round_money(min(frozen - consumed, max(0.0, keep_frozen)))
     refund = round_money(frozen - consumed - keep)
 
     # 1) 已花费部分从冻结池核销（这部分资金已转化为持仓，不再属于任何资金池）
-    user.frozen_cash = round_money(max(0.0, user.frozen_cash - consumed))
+    acct.frozen_cash = round_money(max(0.0, acct.frozen_cash - consumed))
 
     # 2) 未花费且不再需要的差额退回可用资金
     if refund > 0:
-        before = user.cash
-        user.cash = round_money(user.cash + refund)
-        user.frozen_cash = round_money(max(0.0, user.frozen_cash - refund))
-        _add_flow(session, user, "unfreeze", refund, before, order.order_no, "成交后退回冻结资金")
+        before = acct.cash
+        acct.cash = round_money(acct.cash + refund)
+        acct.frozen_cash = round_money(max(0.0, acct.frozen_cash - refund))
+        _add_flow(session, acct, "unfreeze", refund, before, order.order_no, "成交后退回冻结资金")
 
     # 3) 继续挂单的部分保持冻结，供后续再撮合使用
     order.frozen_amount = keep
-    user.updated_at = time.time()
-    session.add(user)
+    accounts.recompute(acct)
+    session.add(acct)
 
 
 def rematch_pending(session: Session) -> int:
@@ -648,14 +662,15 @@ def cancel_order(session: Session, user: User, order_id: int) -> Order:
         raise TradeError("该委托已终结，无法撤单", "ORDER_FINAL")
 
     if order.side == OrderSide.BUY:
-        before = user.cash
+        acct = accounts.of(session, user)
+        before = acct.cash
         remain = order.frozen_amount
         if remain > 0:
-            user.cash = round_money(user.cash + remain)
-            user.frozen_cash = round_money(max(0.0, user.frozen_cash - remain))
-            user.updated_at = time.time()
-            session.add(user)
-            _add_flow(session, user, "unfreeze", remain, before, order.order_no, "撤单解冻")
+            acct.cash = round_money(acct.cash + remain)
+            acct.frozen_cash = round_money(max(0.0, acct.frozen_cash - remain))
+            accounts.recompute(acct)
+            session.add(acct)
+            _add_flow(session, acct, "unfreeze", remain, before, order.order_no, "撤单解冻")
         order.frozen_amount = 0.0
     else:
         pos = _get_position(session, user.id or 0, order.code)
@@ -687,11 +702,12 @@ def settle_positions(session: Session, user: User) -> dict:
         pos.unrealized_pnl = round_money((price - pos.avg_cost) * pos.quantity)
         market_value += pos.market_value
         session.add(pos)
-    user.market_value = round_money(market_value)
-    user.total_asset = round_money(user.cash + user.frozen_cash + market_value)
-    user.updated_at = time.time()
-    session.add(user)
-    return {"market_value": user.market_value, "total_asset": user.total_asset}
+    acct = accounts.of(session, user)
+    acct.market_value = round_money(market_value)
+    acct.total_asset = round_money(acct.cash + acct.frozen_cash + market_value)
+    acct.updated_at = time.time()
+    session.add(acct)
+    return {"market_value": acct.market_value, "total_asset": acct.total_asset}
 
 
 def settle_all(session: Session) -> None:

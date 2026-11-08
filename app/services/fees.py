@@ -46,18 +46,21 @@ def role_commission(role: Optional[Role]) -> tuple[float, float]:
     return ROLE_COMMISSION.get(role, ROLE_COMMISSION[Role.RETAIL])
 
 
-def resolve_commission(account: object | None) -> tuple[float, float]:
+def resolve_commission(account: object | None, acct: object | None = None) -> tuple[float, float]:
     """从账户上取出实际生效的（费率, 最低佣金）。
 
-    账户字段为 None 表示「跟随角色默认」；显式赋值则以账户为准。
-    传入 None（未登录/无账户上下文）时退回全局配置，保持旧调用兼容。
+    拆分账务表之后，费率口径分散在两个对象上：``role`` 属于身份行（User），
+    议价后的 ``commission_rate / commission_min`` 属于账务行（Account）。
+    因此这里接受两个参数：``account`` 提供角色默认，``acct`` 提供显式议价；
+    任一为 None 都退回上一级默认，保持旧调用兼容。
     """
-    if account is None:
+    if account is None and acct is None:
         return (float(settings.commission_rate), float(settings.commission_min))
     role = getattr(account, "role", None)
     base_rate, base_min = role_commission(role if isinstance(role, Role) else None)
-    rate = getattr(account, "commission_rate", None)
-    min_fee = getattr(account, "commission_min", None)
+    source = acct if acct is not None else account
+    rate = getattr(source, "commission_rate", None)
+    min_fee = getattr(source, "commission_min", None)
     return (
         float(base_rate if rate is None else rate),
         float(base_min if min_fee is None else min_fee),

@@ -1,13 +1,11 @@
 <section class="app-page" id="page-institution">
-  <div class="app-page-head">
-    <div class="app-page-title">机构账户</div>
-    <div class="app-page-desc" id="instCount">--</div>
-    <div class="app-toolbar">
-      <input class="app-select" id="instSearch" placeholder="按登录名或昵称搜索" style="width:200px" />
-      <button class="mdui-btn mdui-ripple" id="refreshInst">刷新</button>
-      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent" id="addInst">新建账户</button>
-    </div>
-  </div>
+{% from "admin/components/macros.html" import page_head with context %}
+  {% call page_head("机构账户", "--", "instCount") %}
+        <input class="app-select" id="instSearch" placeholder="按登录名或昵称搜索" style="width:200px" />
+        <button class="mdui-btn mdui-ripple" id="refreshInst">刷新</button>
+        <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent" id="addInst">新建账户</button>
+  {% endcall %}
+
 
   <div class="mdui-card">
     <div class="mdui-table-fluid">

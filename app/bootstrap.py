@@ -22,7 +22,7 @@ from .engine.seed import SEED_BOARDS, SEED_STOCKS, SEED_USERS, LIMIT_BY_BOARD
 from .engine.session import current_session
 from .models import Admin, Board, DailyBar, Industry, Role, Stock, User
 from .security import hash_password
-from .services import reconcile
+from .services import accounts, reconcile
 from .services.trading import rematch_pending, settle_all
 
 # 新建库时回填的日线根数（约一年交易日）。
@@ -131,20 +131,23 @@ def ensure_users(session: Session) -> int:
     for seed in SEED_USERS:
         if seed.username in existing:
             continue
-        session.add(
-            User(
-                username=seed.username,
-                display_name=seed.display_name,
-                password_hash=hash_password(seed.password),
-                role=Role(seed.role),
-                cash=seed.cash,
-                total_asset=seed.cash,
-                credit_limit=seed.credit_limit,
-                risk_level=seed.risk_level,
-                # 种子账户若自带等级，视为「已完成测评」，否则客户端会一直提示去测评
-                risk_assessed_at=now if seed.risk_level > 0 else 0.0,
-            )
+        user = User(
+            username=seed.username,
+            display_name=seed.display_name,
+            password_hash=hash_password(seed.password),
+            role=Role(seed.role),
+            risk_level=seed.risk_level,
+            # 种子账户若自带等级，视为「已完成测评」，否则客户端会一直提示去测评
+            risk_assessed_at=now if seed.risk_level > 0 else 0.0,
         )
+        session.add(user)
+        session.flush()
+        # 身份与资金分表：种子账户的资金行紧随身份行写入
+        acct = accounts.of(session, user)
+        acct.cash = seed.cash
+        acct.credit_limit = seed.credit_limit
+        accounts.recompute(acct)
+        session.add(acct)
         added += 1
     session.commit()
     return added

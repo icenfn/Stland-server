@@ -17,7 +17,7 @@ import pytest  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 
 from app.models import (  # noqa: E402
-    CashFlow, Order, OrderSide, OrderStatus, OrderType, Position, Role, Trade, User,
+    Account, CashFlow, Order, OrderSide, OrderStatus, OrderType, Position, Role, Trade, User,
 )
 from app.services import reconcile  # noqa: E402
 
@@ -31,10 +31,20 @@ def db():
 
 
 def _user(db, name="u1", role=Role.RETAIL, frozen=0.0) -> User:
-    u = User(username=name, role=role, cash=100_000.0, frozen_cash=frozen)
+    """建身份 + 账务两行。资金字段已迁到 Account，User 上不再有 cash。"""
+    u = User(username=name, role=role)
     db.add(u)
     db.commit()
     db.refresh(u)
+    db.add(
+        Account(
+            user_id=u.id,
+            cash=100_000.0,
+            frozen_cash=frozen,
+            total_asset=100_000.0 + frozen,
+        )
+    )
+    db.commit()
     return u
 
 

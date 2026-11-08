@@ -1,11 +1,9 @@
 <section class="app-page on" id="page-overview">
-  <div class="app-page-head">
-    <div class="app-page-title">总览</div>
-    <div class="app-page-desc">账户、资产与今日交易的整体情况</div>
-    <div class="app-toolbar">
-      <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="refreshOverview">刷新</button>
-    </div>
-  </div>
+{% from "admin/components/macros.html" import page_head with context %}
+  {% call page_head("总览", "账户、资产与今日交易的整体情况", "") %}
+        <button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" id="refreshOverview">刷新</button>
+  {% endcall %}
+
 
   <div class="app-kpi-grid" id="ovKpi"></div>
 

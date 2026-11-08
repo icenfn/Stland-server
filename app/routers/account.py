@@ -22,10 +22,11 @@ from sqlmodel import Session, select
 from ..db import get_session
 from ..engine.market import market_engine
 from ..models import CashFlow, Position, Stock, Trade, User, OrderSide
-from ..services.deps import current_user, signed_request
+from ..services import accounts
+from ..services.deps import current_user
 from ..services.trading import settle_positions
 
-router = APIRouter(prefix="/api/account", tags=["account"])
+router = APIRouter(prefix="/api/v1/account", tags=["account"])
 
 # 风险偏好等级：0 未测评 / 1 保守 / 2 稳健 / 3 进取
 RISK_LEVEL_LABELS = {0: "未测评", 1: "保守型", 2: "稳健型", 3: "进取型"}
@@ -42,7 +43,7 @@ def risk_payload(user: User) -> dict:
     }
 
 
-@router.get("/summary", dependencies=[Depends(signed_request)])
+@router.get("/summary")
 def summary(session: Session = Depends(get_session), user: User = Depends(current_user)) -> dict:
     settle_positions(session, user)
     session.commit()
@@ -90,6 +91,8 @@ def summary(session: Session = Depends(get_session), user: User = Depends(curren
             floating_pnl += (last - p.avg_cost) * p.quantity
             floating_cost += p.avg_cost * p.quantity
 
+    # 资金口径统一由 services.accounts 给出，避免这里再抄一遍字段名
+    money = accounts.snapshot(accounts.of(session, user))
     return {
         "user": {
             "id": user.id,
@@ -99,13 +102,7 @@ def summary(session: Session = Depends(get_session), user: User = Depends(curren
             "risk_level": user.risk_level,
         },
         "asset": {
-            "cash": round(user.cash, 2),
-            "frozen_cash": round(user.frozen_cash, 2),
-            "market_value": round(user.market_value, 2),
-            "total_asset": round(user.total_asset, 2),
-            "credit_limit": round(user.credit_limit, 2),
-            "realized_pnl": round(user.realized_pnl, 2),
-            "fee_paid": round(user.fee_paid, 2),
+            **money,
             "day_pnl": round(day_pnl, 2),
             "floating_pnl": round(floating_pnl, 2),
             "floating_pct": round(floating_pnl / floating_cost * 100, 2) if floating_cost > 0 else 0.0,
@@ -114,7 +111,7 @@ def summary(session: Session = Depends(get_session), user: User = Depends(curren
     }
 
 
-@router.get("/positions", dependencies=[Depends(signed_request)])
+@router.get("/positions")
 def positions(session: Session = Depends(get_session), user: User = Depends(current_user)) -> dict:
     settle_positions(session, user)
     session.commit()
@@ -143,7 +140,7 @@ def positions(session: Session = Depends(get_session), user: User = Depends(curr
     return {"items": items}
 
 
-@router.get("/flows", dependencies=[Depends(signed_request)])
+@router.get("/flows")
 def flows(
     limit: int = Query(default=50, ge=1, le=300),
     session: Session = Depends(get_session),
@@ -212,7 +209,7 @@ def level_of_answers(answers: list[int]) -> int:
     return 3
 
 
-@router.post("/risk", dependencies=[Depends(signed_request)])
+@router.post("/risk")
 def set_risk(
     payload: RiskIn,
     session: Session = Depends(get_session),
@@ -236,7 +233,7 @@ def set_risk(
     return {"risk": risk_payload(user), "version": payload.version}
 
 
-@router.get("/risk", dependencies=[Depends(signed_request)])
+@router.get("/risk")
 def get_risk(session: Session = Depends(get_session), user: User = Depends(current_user)) -> dict:
     """读取当前风险偏好。未测评时 assessed=False，客户端据此引导去做测评。"""
     session.refresh(user)

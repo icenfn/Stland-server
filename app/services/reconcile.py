@@ -17,7 +17,7 @@
    对不上说明股票没有真正从卖方划到买方（凭空生成或多划）。
 
 3. **冻结资金 = 在途买单的冻结额之和**
-   ``user.frozen_cash == Σ open_buy_order.frozen_amount``
+   ``account.frozen_cash == Σ open_buy_order.frozen_amount``
    对不上说明有委托终结却忘了解冻，或解冻了还在挂的单。
 
 4. **成交金额 = 价 × 量**，且**双面成交必须配对**
@@ -35,6 +35,7 @@ from collections import defaultdict
 from sqlalchemy import func
 from sqlmodel import Session, select
 
+from . import accounts
 from ..models import CashFlow, Order, OrderSide, OrderStatus, Position, Trade, User
 
 logger = logging.getLogger("stland.reconcile")
@@ -148,10 +149,13 @@ def check_frozen_cash(session: Session) -> list[Finding]:
             .group_by(Order.user_id)
         ).all()
     }
+    # 冻结资金现在落在 account 表：只有存在资金行的账户才可能「冻结了钱」，
+    # 没有 account 行的用户视作全零，不必单独补一条差异。
     out: list[Finding] = []
     for user in session.exec(select(User)).all():
+        acct = accounts.find(session, int(user.id or 0))
         expect = sums.get(int(user.id or 0), 0.0)
-        actual = float(user.frozen_cash or 0.0)
+        actual = float(acct.frozen_cash if acct is not None else 0.0)
         if abs(_q(actual) - _q(expect)) > AMOUNT_TOL:
             out.append(
                 Finding(

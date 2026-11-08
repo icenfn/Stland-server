@@ -10,10 +10,11 @@ from ..engine.book import Level, walk_book, vwap
 from ..engine.market import market_engine
 from ..models import Order, OrderSide, OrderStatus, Stock, Trade, User
 from ..services import trading
-from ..services.deps import current_user, signed_request
+from ..services.deps import current_user
+from ..services import accounts
 from ..services.fees import calc_fee, max_buy_quantity, resolve_commission
 
-router = APIRouter(prefix="/api/trade", tags=["trade"])
+router = APIRouter(prefix="/api/v1/trade", tags=["trade"])
 
 
 class OrderIn(BaseModel):
@@ -47,7 +48,7 @@ def order_view(o: Order) -> dict:
     }
 
 
-@router.post("/order", dependencies=[Depends(signed_request)])
+@router.post("/order")
 def create_order(
     payload: OrderIn,
     session: Session = Depends(get_session),
@@ -83,7 +84,7 @@ def create_order(
     }
 
 
-@router.post("/cancel", dependencies=[Depends(signed_request)])
+@router.post("/cancel")
 def cancel(
     payload: CancelIn,
     session: Session = Depends(get_session),
@@ -169,7 +170,9 @@ def preview(
     fillable = sum(f.quantity for f in fills) if fills else (quantity if price else 0)
     avg_price = vwap(fills) if fills else eff_price
     amount = avg_price * quantity
-    fee = calc_fee(amount, side.value, *resolve_commission(user))
+    acct = accounts.of(session, user)
+    fee = calc_fee(amount, side.value, *resolve_commission(user, acct))
+    avail = accounts.available_cash(acct, user.role.value)
     return {
         "code": code,
         "side": side.value,
@@ -188,7 +191,7 @@ def preview(
             "total": fee.total,
         },
         "max_buy_quantity": max_buy_quantity(
-            user.cash, market_engine.price_of(code), stock.lot_size, *resolve_commission(user)
+            avail, market_engine.price_of(code), stock.lot_size, *resolve_commission(user, acct)
         ),
-        "available_cash": round(user.cash, 2),
+        "available_cash": round(acct.cash, 2),
     }

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -24,6 +25,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .bootstrap import bootstrap, start_engine, stop_engine
+from .errors import install_error_handlers
+from .versioning import ApiVersionAlias
 from .config import settings
 from .engine.session import current_session
 from .routers import account, admin, auth, market, stream, trade, watch
@@ -65,6 +68,9 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+# /api/v1 是唯一对外约定；/api/* 由中间件内部重写到 /api/v1/*
+app.add_middleware(ApiVersionAlias)
+
 # 移动端为 Tauri WebView 容器（origin 为 tauri://localhost 或 https://tauri.localhost）
 app.add_middleware(
     CORSMiddleware,
@@ -78,7 +84,10 @@ app.add_middleware(
 @app.middleware("http")
 async def add_meta(request: Request, call_next):
     start = time.time()
+    # 每个请求一个 trace_id：错误体与响应头都带上，便于把用户截图和日志对上
+    request.state.trace_id = uuid.uuid4().hex[:16]
     response = await call_next(request)
+    response.headers["X-Trace-Id"] = request.state.trace_id
     response.headers["X-Stland-Version"] = settings.app_version
     response.headers["X-Stland-Server-Time"] = str(int(time.time()))
     response.headers["X-Process-Time"] = f"{(time.time() - start) * 1000:.1f}ms"
@@ -87,13 +96,7 @@ async def add_meta(request: Request, call_next):
     return response
 
 
-@app.exception_handler(Exception)
-async def unhandled(request: Request, exc: Exception):  # pragma: no cover
-    logger.exception("未处理异常 %s %s", request.method, request.url.path)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": {"code": "INTERNAL_ERROR", "message": "服务端内部错误，请稍后重试"}},
-    )
+install_error_handlers(app)
 
 
 # 运营后台：Jinja2 服务端渲染。
